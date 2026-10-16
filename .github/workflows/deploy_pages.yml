@@ -4,8 +4,9 @@ on:
   push:
     branches: [main]
   schedule:
-    # Runs at minute 15 of every hour.
-    - cron: '15 * * * *'
+    # Every Tuesday at 1:00 PM Pacific (20:00 UTC during PDT, 21:00 UTC during PST).
+    - cron: '0 20 * * 2'
+    - cron: '0 21 * * 2'
   workflow_dispatch:
 
 permissions:
@@ -24,18 +25,44 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
+      - name: Check Pacific Daylight/Standard Time for scheduled runs
+        id: tz_check
+        run: |
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          tz_abbr=$(TZ=America/Los_Angeles date +%Z)
+          if [ "${{ github.event.schedule }}" = "0 20 * * 2" ] && [ "$tz_abbr" = "PDT" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event.schedule }}" = "0 21 * * 2" ] && [ "$tz_abbr" = "PST" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Skipping ${{ github.event.schedule }} because America/Los_Angeles is currently in $tz_abbr."
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Checkout repository
+        if: steps.tz_check.outputs.should_run == 'true'
         uses: actions/checkout@v4
 
       - name: Set up Dart
+        if: steps.tz_check.outputs.should_run == 'true'
         uses: dart-lang/setup-dart@v1
         with:
           sdk: stable
 
       - name: Install dependencies
+        if: steps.tz_check.outputs.should_run == 'true'
         run: dart pub get
 
+      - name: Configure GitHub Pages
+        if: steps.tz_check.outputs.should_run == 'true'
+        id: pages
+        uses: actions/configure-pages@v5
+
       - name: Restore PR detail cache and previous report state
+        if: steps.tz_check.outputs.should_run == 'true'
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -45,13 +72,22 @@ jobs:
           restore-keys: |
             triage-state-
 
+      - name: Fetch previous report state from live Pages site if cache expired
+        if: steps.tz_check.outputs.should_run == 'true'
+        run: |
+          mkdir -p site
+          if [ ! -f site/index.state.json ]; then
+            curl -fsSL "${{ steps.pages.outputs.base_url }}/index.state.json" -o site/index.state.json || true
+          fi
+
       - name: Generate HTML triage report
+        if: steps.tz_check.outputs.should_run == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: dart run bin/pr_inspector.dart --html site/index.html
 
       - name: Save PR detail cache and report state
-        if: always()
+        if: always() && steps.tz_check.outputs.should_run == 'true'
         uses: actions/cache/save@v4
         with:
           path: |
@@ -59,14 +95,13 @@ jobs:
             site/index.state.json
           key: triage-state-${{ github.run_id }}
 
-      - name: Configure GitHub Pages
-        uses: actions/configure-pages@v5
-
       - name: Upload Pages artifact
+        if: steps.tz_check.outputs.should_run == 'true'
         uses: actions/upload-pages-artifact@v3
         with:
           path: site
 
       - name: Deploy to GitHub Pages
+        if: steps.tz_check.outputs.should_run == 'true'
         id: deployment
         uses: actions/deploy-pages@v4

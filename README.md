@@ -5,8 +5,8 @@ to act, and flags PRs that are missing reviewers.
 ## Hosting on GitHub Pages
 
 This repository includes [`.github/workflows/deploy_pages.yml`](.github/workflows/deploy_pages.yml),
-which builds the HTML report every hour (and on pushes to `main` or manual **Run workflow** triggers)
-and publishes it to GitHub Pages.
+which builds the HTML report every Tuesday at 1:00 PM Pacific (and on pushes to `main` or manual
+**Run workflow** triggers) and publishes it to GitHub Pages.
 
 To enable it on a standalone repository:
 1. Go to **Settings → Pages**.
