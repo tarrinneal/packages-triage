@@ -1,0 +1,17 @@
+name: pr_inspector
+description: A command line tool to inspect GitHub PRs.
+version: 0.0.1
+environment:
+  sdk: '>=3.8.0 <4.0.0'
+
+executables:
+  pr_inspector:
+
+dependencies:
+  ansicolor: ^2.0.3
+  args: ^2.5.0
+  collection: ^1.19.1
+  http: ^1.2.2
+
+dev_dependencies:
+  test: ^1.16.0

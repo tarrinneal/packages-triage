@@ -1,0 +1,72 @@
+name: Deploy PR Triage Report to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # Runs at minute 15 of every hour.
+    - cron: '15 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Dart
+        uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+
+      - name: Install dependencies
+        run: dart pub get
+
+      - name: Restore PR detail cache and previous report state
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/pr_inspector
+            site/index.state.json
+          key: triage-state-${{ github.run_id }}
+          restore-keys: |
+            triage-state-
+
+      - name: Generate HTML triage report
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: dart run bin/pr_inspector.dart --html site/index.html
+
+      - name: Save PR detail cache and report state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/pr_inspector
+            site/index.state.json
+          key: triage-state-${{ github.run_id }}
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
