@@ -458,4 +458,49 @@ void main() {
       expect(reloaded.approvalCount, 1);
     });
   });
+
+  test('tracks earliest author follow-up comment after the latest team comment', () async {
+    final PRInfo pr = await fetch(
+      _listing(1),
+      _commentResponses(
+        1,
+        issueComments: <Object?>[
+          _comment('contributor', created: '2026-09-02T00:00:00Z'),
+          _comment('teammate', association: 'MEMBER', created: '2026-09-05T00:00:00Z'),
+          _comment('contributor', created: '2026-09-06T00:00:00Z'),
+          _comment('contributor', created: '2026-09-18T00:00:00Z'),
+        ],
+      ),
+    );
+    expect(pr.memberComment!.date, DateTime.utc(2026, 9, 5));
+    expect(pr.authorFollowUpComment!.date, DateTime.utc(2026, 9, 6));
+    expect(pr.authorComment!.date, DateTime.utc(2026, 9, 18));
+  });
+
+  test('fetchIssueDetails populates comments and follow-up date', () async {
+    final GitHubClient client = replayClient(<String, Map<String, Object?>>{
+      _url('/repos/$_repo/issues/55/comments', <String, String>{
+        'per_page': '100',
+        'page': '1',
+      }): _ok(<Object?>[
+        _comment('teammate', association: 'MEMBER'),
+        _comment('contributor', created: '2026-09-12T00:00:00Z'),
+        _comment('contributor', created: '2026-09-19T00:00:00Z'),
+      ]),
+    });
+    try {
+      final IssueInfo issue = await fetchIssueDetails(
+        client,
+        _repo,
+        _listing(55, labels: <String>['team-ecosystem', 'triaged-ecosystem', 'P2']),
+        const <String>{},
+      );
+      expect(issue.fetchErrors, isEmpty);
+      expect(issue.memberComment!.date, DateTime.utc(2026, 9, 10));
+      expect(issue.authorFollowUpComment!.date, DateTime.utc(2026, 9, 12));
+      expect(issue.authorComment!.date, DateTime.utc(2026, 9, 19));
+    } finally {
+      client.close();
+    }
+  });
 }

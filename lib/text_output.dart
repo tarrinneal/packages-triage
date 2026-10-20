@@ -12,12 +12,14 @@ import 'types.dart';
 import 'utils.dart';
 
 /// Prints [prs], which must already be sorted with [comparePRs], grouped by
-/// page and section.
+/// page and section, followed by any actionable [issues].
 ///
 /// PRs with any of [hiddenLabels] are left out unless [showHidden] is true.
 void printTextReport(
   String repo,
   List<PRAnalysis> prs, {
+  List<IssueAnalysis> issues = const <IssueAnalysis>[],
+  String? issuesRepo,
   Set<String> hiddenLabels = defaultHiddenLabels,
   bool showHidden = false,
   Map<int, PreviousPlacement>? previous,
@@ -45,6 +47,25 @@ void printTextReport(
       sink.writeln();
     }
   }
+  if (issues.isNotEmpty) {
+    final String effectiveIssuesRepo = issuesRepo ?? repo;
+    sink
+      ..writeln(headingPen('$effectiveIssuesRepo · Package Issues (${issues.length})'))
+      ..writeln();
+    for (final IssueSection section in IssueSection.values) {
+      final List<IssueAnalysis> rows = issues
+          .where((IssueAnalysis a) => a.section == section)
+          .toList();
+      if (rows.isEmpty) {
+        continue;
+      }
+      sink.writeln(headingPen('${issueSectionTitle(section)} (${rows.length})'));
+      for (final row in rows) {
+        _printIssueRow(sink, row);
+      }
+      sink.writeln();
+    }
+  }
   final int hiddenCount = prs.length - shown.length;
   if (hiddenCount > 0) {
     sink.writeln(
@@ -65,18 +86,40 @@ void _printRow(StringSink sink, PRAnalysis analysis, Map<int, PreviousPlacement>
   ];
   sink
     ..writeln(
-      '  #${pr.number}${badge == null ? '' : ' [${badge.label}]'} ${pr.title} · '
+      '  #${pr.number}${badge == null ? '' : ' [${badge.label}]'}'
+      '${analysis.isFollowUp ? ' [FOLLOW-UP]' : ''} ${pr.title} · '
       '${emojiForContributorType(pr.authorType)} ${pr.author}',
     )
     ..writeln('    ${details.join(' · ')}')
     ..writeln('    ${pr.url}');
 }
 
-AnsiPen _penFor(PRAnalysis analysis) {
-  if (analysis.section == Section.loadError) {
+void _printIssueRow(StringSink sink, IssueAnalysis analysis) {
+  final IssueInfo issue = analysis.issue;
+  final details = <String>[
+    _penForUrgency(analysis.urgency, loadError: analysis.section == IssueSection.loadError)(
+      issueWaitingLabel(analysis),
+    ),
+    if (analysis.nextStep.isNotEmpty) analysis.nextStep,
+    if (issue.assignees.isNotEmpty) issue.assignees.map((String a) => '@$a').join(', '),
+  ];
+  sink
+    ..writeln(
+      '  #${issue.number}${analysis.isFollowUp ? ' [FOLLOW-UP]' : ''} ${issue.title} · '
+      '${emojiForContributorType(issue.authorType)} ${issue.author}',
+    )
+    ..writeln('    ${details.join(' · ')}')
+    ..writeln('    ${issue.url}');
+}
+
+AnsiPen _penFor(PRAnalysis analysis) =>
+    _penForUrgency(analysis.urgency, loadError: analysis.section == Section.loadError);
+
+AnsiPen _penForUrgency(Urgency urgency, {required bool loadError}) {
+  if (loadError) {
     return AnsiPen()..magenta();
   }
-  return switch (analysis.urgency) {
+  return switch (urgency) {
     Urgency.notYet => AnsiPen()..green(),
     Urgency.due => AnsiPen()..yellow(),
     Urgency.overdue => AnsiPen()..red(),
@@ -91,7 +134,7 @@ void printExplanation(PRAnalysis analysis, {StringSink? out}) {
   final PRInfo pr = analysis.pr;
   final String reviewers = reviewersText(pr);
   sink
-    ..writeln('#${pr.number}: ${pr.title}')
+    ..writeln('#${pr.number}${analysis.isFollowUp ? ' [FOLLOW-UP]' : ''}: ${pr.title}')
     ..writeln('  ${pr.url}')
     ..writeln(
       '  Author:     ${emojiForContributorType(pr.authorType)} ${pr.author} '
@@ -113,6 +156,11 @@ void printExplanation(PRAnalysis analysis, {StringSink? out}) {
       ..writeln('    Author:     ${_formatComment(pr.authorComment)}')
       ..writeln('    Team:       ${_formatComment(pr.memberComment)}')
       ..writeln('    Non-member: ${_formatComment(pr.nonMemberComment)}');
+    if (pr.authorFollowUpComment != null &&
+        pr.authorComment != null &&
+        pr.authorFollowUpComment!.date != pr.authorComment!.date) {
+      sink.writeln('    Follow-up:  ${_formatComment(pr.authorFollowUpComment)}');
+    }
   }
   sink.writeln('  Why:');
   for (final String reason in analysis.reasons) {

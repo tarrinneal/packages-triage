@@ -108,6 +108,13 @@ class PRInfo {
   /// The PR author's newest comment, if comments were fetched.
   Comment? authorComment;
 
+  /// The PR author's earliest comment after [memberComment], if the author
+  /// has replied since the team's last comment.
+  ///
+  /// Used to time how long a follow-up has been waiting on the team so that
+  /// later pings from the author don't reset their waiting time.
+  Comment? authorFollowUpComment;
+
   /// The newest comment from a team member other than the author.
   Comment? memberComment;
 
@@ -212,6 +219,7 @@ class PRAnalysis {
     required this.urgency,
     required this.nextStep,
     required this.reasons,
+    this.isFollowUp = false,
   });
 
   /// The PR.
@@ -237,4 +245,136 @@ class PRAnalysis {
 
   /// Why the PR was placed where it was, for display.
   final List<String> reasons;
+
+  /// Whether a team member commented on this PR, the author replied afterwards,
+  /// and the PR is now waiting on the team for a follow-up.
+  final bool isFollowUp;
+}
+
+/// Everything the tool knows about a GitHub issue.
+class IssueInfo {
+  /// Creates an issue with no comment data.
+  IssueInfo({
+    required this.number,
+    required this.author,
+    required this.title,
+    required this.url,
+    required this.creationDate,
+    required this.updatedDate,
+    required this.authorType,
+    this.labels = const <String>[],
+    this.assignees = const <String>[],
+    this.commentCount = 0,
+  });
+
+  /// The issue number.
+  final int number;
+
+  /// The issue author's login.
+  final String author;
+
+  /// The issue title.
+  final String title;
+
+  /// The issue's web URL.
+  final String url;
+
+  /// When the issue was opened.
+  final DateTime creationDate;
+
+  /// When anything about the issue last changed, according to GitHub.
+  final DateTime updatedDate;
+
+  /// Who opened the issue.
+  final ContributorType authorType;
+
+  /// The issue's label names.
+  final List<String> labels;
+
+  /// Logins of users assigned to the issue.
+  final List<String> assignees;
+
+  /// Total number of comments reported by GitHub's issue listing.
+  final int commentCount;
+
+  /// The issue author's newest comment, if comments were fetched.
+  Comment? authorComment;
+
+  /// The issue author's earliest comment after [memberComment], if the author
+  /// has replied since the team's last comment.
+  Comment? authorFollowUpComment;
+
+  /// The newest comment from a team member other than the author.
+  Comment? memberComment;
+
+  /// The newest comment from anyone else.
+  Comment? nonMemberComment;
+
+  /// Whether comments were fetched for this issue.
+  bool hasDetails = false;
+
+  /// Descriptions of any data that failed to load.
+  final List<String> fetchErrors = <String>[];
+}
+
+/// The sections of the package issues triage page, in display order.
+enum IssueSection {
+  /// Issues whose data couldn't be loaded.
+  loadError,
+
+  /// Open `team-ecosystem` issues that haven't been triaged yet.
+  untriaged,
+
+  /// Open `fyi-ecosystem` issues flagged for the ecosystem team's attention.
+  fyiEcosystem,
+
+  /// Issues where a team member commented, the author replied, and the issue
+  /// is now waiting on the team.
+  waitingOnTeam,
+
+  /// Open `P0` or `P1` `team-ecosystem` issues.
+  highPriority,
+
+  /// Open `team-ecosystem` issues labeled `waiting for response`.
+  waitingOnAuthor,
+}
+
+/// Where an issue belongs on the issues triage page, and why.
+class IssueAnalysis {
+  /// Creates an analysis of [issue].
+  IssueAnalysis({
+    required this.issue,
+    required this.section,
+    required this.waitingSince,
+    required this.waitingDays,
+    required this.urgency,
+    required this.nextStep,
+    required this.reasons,
+    this.isFollowUp = false,
+  });
+
+  /// The issue.
+  final IssueInfo issue;
+
+  /// The section the issue is shown in.
+  final IssueSection section;
+
+  /// When whoever needs to act next got the issue.
+  final DateTime waitingSince;
+
+  /// Whole days since [waitingSince].
+  final int waitingDays;
+
+  /// How overdue the issue is.
+  final Urgency urgency;
+
+  /// What a triager should do, or an empty string if nothing is needed yet.
+  final String nextStep;
+
+  /// Why the issue was placed where it was, for display.
+  final List<String> reasons;
+
+  /// Whether a team member commented on this issue and the author replied
+  /// afterwards.
+  final bool isFollowUp;
 }

@@ -13,6 +13,10 @@ import 'utils.dart';
 /// `triage_team.html` for `triage.html`.
 File teamPageFileFor(File communityFile) => File('${_stem(communityFile.path)}_team.html');
 
+/// The issues page that [writeHtmlReport] writes next to [communityFile], e.g.
+/// `triage_issues.html` for `triage.html`.
+File issuesPageFileFor(File communityFile) => File('${_stem(communityFile.path)}_issues.html');
+
 /// The state file used for NEW and MOVED badges, next to [communityFile],
 /// e.g. `triage.state.json` for `triage.html`.
 File stateFileFor(File communityFile) => File('${_stem(communityFile.path)}.state.json');
@@ -30,24 +34,28 @@ String _stem(String path) {
 
 String _basename(String path) => path.substring(_lastSeparator(path) + 1);
 
-/// Writes the report as two linked HTML pages: community and bot PRs to
-/// [communityFile], and team PRs to [teamPageFileFor] it.
+/// Writes the report as linked HTML pages: community and bot PRs to
+/// [communityFile], team PRs to [teamPageFileFor] it, and actionable package
+/// issues to [issuesPageFileFor] it.
 ///
-/// [prs] must already be sorted with [comparePRs]. PRs with any of
-/// [hiddenLabels] start out hidden unless [showHiddenByDefault] is true, and
-/// a button on each page shows or hides them. [previous] placements, if
-/// given, are used for NEW and MOVED badges. [note] is shown under the
-/// header, e.g. to say the report is partial.
+/// [prs] must already be sorted with [comparePRs], and [issues] with
+/// [compareIssues]. PRs with any of [hiddenLabels] start out hidden unless
+/// [showHiddenByDefault] is true, and a button on each page shows or hides
+/// them. [previous] placements, if given, are used for NEW and MOVED badges.
+/// [note] is shown under the header, e.g. to say the report is partial.
 void writeHtmlReport({
   required String repo,
   required List<PRAnalysis> prs,
   required File communityFile,
   required DateTime generatedAt,
+  List<IssueAnalysis> issues = const <IssueAnalysis>[],
+  String? issuesRepo,
   Map<int, PreviousPlacement>? previous,
   Set<String> hiddenLabels = defaultHiddenLabels,
   bool showHiddenByDefault = false,
   String? note,
 }) {
+  final File issuesFile = issuesPageFileFor(communityFile);
   final files = <ReportPage, File>{
     ReportPage.community: communityFile,
     ReportPage.team: teamPageFileFor(communityFile),
@@ -57,7 +65,9 @@ void writeHtmlReport({
       page: page,
       repo: repo,
       prs: prs,
+      issuesCount: issues.length,
       files: files,
+      issuesFile: issuesFile,
       generatedAt: generatedAt,
       previous: previous,
       hiddenLabels: hiddenLabels,
@@ -68,6 +78,18 @@ void writeHtmlReport({
       ..createSync(recursive: true)
       ..writeAsStringSync(html);
   }
+  final String issuesHtml = _IssuesPageRenderer(
+    issuesRepo: issuesRepo ?? repo,
+    prs: prs,
+    issues: issues,
+    files: files,
+    issuesFile: issuesFile,
+    generatedAt: generatedAt,
+    note: note,
+  ).render();
+  issuesFile
+    ..createSync(recursive: true)
+    ..writeAsStringSync(issuesHtml);
 }
 
 class _PageRenderer {
@@ -75,7 +97,9 @@ class _PageRenderer {
     required this.page,
     required this.repo,
     required this.prs,
+    required this.issuesCount,
     required this.files,
+    required this.issuesFile,
     required this.generatedAt,
     required this.previous,
     required this.hiddenLabels,
@@ -87,7 +111,9 @@ class _PageRenderer {
   final String repo;
   final List<PRAnalysis> prs;
   final List<PRAnalysis> pagePRs;
+  final int issuesCount;
   final Map<ReportPage, File> files;
+  final File issuesFile;
   final DateTime generatedAt;
   final Map<int, PreviousPlacement>? previous;
   final Set<String> hiddenLabels;
@@ -142,11 +168,13 @@ $_css</style>
     final pageLinks = <String>[
       for (final ReportPage other in ReportPage.values)
         _pageLink(other, prs.where((PRAnalysis a) => a.page == other).length),
+      '<a href="${_escape(_basename(issuesFile.path))}">Issues ($issuesCount)</a>',
     ];
     final sectionLinks = <String>[for (final section in sections) _sectionLink(section)];
     final int hiddenCount = pagePRs
         .where((PRAnalysis a) => hasHiddenLabel(a.pr, hiddenLabels))
         .length;
+    final int followUpCount = pagePRs.where((PRAnalysis a) => a.isFollowUp).length;
     final buttonLabel = '${hiddenLabels.join('/')} PRs ($hiddenCount)';
     final int failed = _inSection(Section.loadError).length;
     _out.write('''
@@ -157,6 +185,7 @@ $_css</style>
 <nav class="sections">${sectionLinks.join(' · ')}</nav>
 <div class="controls">
 <input id="filter" type="search" placeholder="Filter by number, title, author, label, reviewer, or next step" autocomplete="off">
+<button id="toggle-followup" type="button" aria-pressed="false"${followUpCount == 0 ? ' disabled' : ''}>Follow-up PRs ($followUpCount)</button>
 ''');
     if (hiddenLabels.isNotEmpty) {
       _out.writeln(
@@ -240,6 +269,7 @@ $_css</style>
       ...pr.labels,
       ...pr.reviewers.keys,
       analysis.nextStep,
+      if (analysis.isFollowUp) 'follow-up',
     ].join(' ').toLowerCase();
     final _Activity activity = _activity(pr, now);
     final waitingClass = analysis.section == Section.loadError
@@ -251,6 +281,7 @@ $_css</style>
       ..write(classes.isEmpty ? '' : ' class="${classes.join(' ')}"')
       ..write(' data-number="${pr.number}"')
       ..write(' data-labels="${_escape(pr.labels.join('|'))}"')
+      ..write(analysis.isFollowUp ? ' data-followup="true"' : '')
       ..write(' data-search="${_escape(search)}"')
       ..write(' data-waiting="${analysis.waitingDays}"')
       ..write(' data-activity="${activity.days}"')
@@ -264,6 +295,12 @@ $_css</style>
             ? ''
             : ' <span class="badge ${badge.label.toLowerCase()}" '
                   'title="${_escape(badge.description)}">${badge.label}</span>',
+      )
+      ..write(
+        analysis.isFollowUp
+            ? ' <span class="badge follow-up" '
+                  'title="The author replied after the team\'s last comment">FOLLOW-UP</span>'
+            : '',
       )
       ..writeln('</td>')
       ..write('<td class="title">${_escape(pr.title)}')
@@ -314,7 +351,218 @@ $_css</style>
 <li>Waiting: <span class="urgency-notYet">under ${dueDays}d</span> · <span class="urgency-due">due at ${dueDays}d</span> · <span class="urgency-overdue">overdue at ${overdueDays}d</span> · <span class="urgency-critical">critical at ${criticalDays}d</span> (community PRs waiting this long on their author are candidates for closing). Rows that aren't due yet are dimmed.</li>
 <li>Reviewers: ${emojiForReviewState(ReviewState.changesRequested)} changes requested · ${emojiForReviewState(ReviewState.commented)} commented · ${emojiForReviewState(ReviewState.pending)} review requested · ${emojiForReviewState(ReviewState.approved)} approved</li>
 <li>Authors: ${emojiForContributorType(ContributorType.community)} community · ${emojiForContributorType(ContributorType.member)} team · ${emojiForContributorType(ContributorType.bot)} bot</li>
-<li><span class="badge new">NEW</span> not in the previous report · <span class="badge moved">MOVED</span> in a different section in the previous report</li>
+<li><span class="badge follow-up">FOLLOW-UP</span> author replied after the team's last comment · <span class="badge new">NEW</span> not in the previous report · <span class="badge moved">MOVED</span> in a different section in the previous report</li>
+</ul>
+</section>
+''');
+  }
+}
+
+class _IssuesPageRenderer {
+  _IssuesPageRenderer({
+    required this.issuesRepo,
+    required this.prs,
+    required this.issues,
+    required this.files,
+    required this.issuesFile,
+    required this.generatedAt,
+    required this.note,
+  });
+
+  final String issuesRepo;
+  final List<PRAnalysis> prs;
+  final List<IssueAnalysis> issues;
+  final Map<ReportPage, File> files;
+  final File issuesFile;
+  final DateTime generatedAt;
+  final String? note;
+
+  final StringBuffer _out = StringBuffer();
+
+  List<IssueAnalysis> _inSection(IssueSection section) =>
+      issues.where((IssueAnalysis a) => a.section == section).toList();
+
+  String render() {
+    final sections = <IssueSection>[
+      for (final IssueSection section in IssueSection.values)
+        if (section != IssueSection.loadError || _inSection(section).isNotEmpty) section,
+    ];
+    _out.write('''
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${_escape('$issuesRepo: Package Issues')}</title>
+<style>
+$_css</style>
+</head>
+<body data-hidden-labels="" data-show-hidden-default="true">
+''');
+    _writeHeader(sections);
+    sections.forEach(_writeSection);
+    _writeLegend();
+    _out
+      ..writeln('<script>')
+      ..write(_script)
+      ..writeln('</script>')
+      ..writeln('</body>')
+      ..writeln('</html>');
+    return _out.toString();
+  }
+
+  void _writeHeader(List<IssueSection> sections) {
+    final pageLinks = <String>[
+      for (final ReportPage other in ReportPage.values)
+        _otherPageLink(other, prs.where((PRAnalysis a) => a.page == other).length),
+      '<strong>Issues (${issues.length})</strong>',
+    ];
+    final sectionLinks = <String>[for (final section in sections) _sectionLink(section)];
+    final int followUpCount = issues.where((IssueAnalysis a) => a.isFollowUp).length;
+    final int failed = _inSection(IssueSection.loadError).length;
+    _out.write('''
+<header>
+<h1>${_escape(issuesRepo)} · Package Issues</h1>
+<nav class="pages">${pageLinks.join(' · ')}</nav>
+<p class="meta">Generated ${_escape(formatAsMinute(generatedAt))} · ${issues.length} actionable package issues on this page</p>
+<nav class="sections">${sectionLinks.join(' · ')}</nav>
+<div class="controls">
+<input id="filter" type="search" placeholder="Filter by number, title, author, label, assignee, or next step" autocomplete="off">
+<button id="toggle-followup" type="button" aria-pressed="false"${followUpCount == 0 ? ' disabled' : ''}>Follow-up issues ($followUpCount)</button>
+</div>
+''');
+    if (failed > 0) {
+      _out.writeln(
+        '<p class="banner">⚠️ $failed ${failed == 1 ? 'issue' : 'issues'} failed to load, so '
+        '${failed == 1 ? 'it is' : 'they are'} listed under "Failed to load" instead of '
+        'being sorted. Rerun to retry.</p>',
+      );
+    }
+    final String? note = this.note;
+    if (note != null) {
+      _out.writeln('<p class="note">${_escape(note)}</p>');
+    }
+    _out.writeln('</header>');
+  }
+
+  String _otherPageLink(ReportPage other, int count) =>
+      '<a href="${_escape(_basename(files[other]!.path))}">${pageTitle(other)} ($count)</a>';
+
+  String _sectionLink(IssueSection section) =>
+      '<a href="#${section.name}">${_escape(issueSectionTitle(section))} '
+      '(<span data-count="${section.name}">${_inSection(section).length}</span>)</a>';
+
+  void _writeSection(IssueSection section) {
+    final List<IssueAnalysis> rows = _inSection(section);
+    _out.write('''
+<details id="${section.name}" data-section="${section.name}" open>
+<summary><h2>${_escape(issueSectionTitle(section))} (<span data-count="${section.name}">${rows.length}</span>)</h2></summary>
+<table>
+<thead>
+<tr>
+<th data-sort="number" data-numeric>Issue</th>
+<th data-sort="title">Title</th>
+<th data-sort="author">Author</th>
+<th data-sort="next">Next step</th>
+<th data-sort="waiting" data-numeric>Waiting</th>
+<th data-sort="assignees">Assignees</th>
+<th data-sort="activity" data-numeric>Last activity</th>
+<th data-sort="opened" data-numeric>Opened</th>
+</tr>
+</thead>
+<tbody>
+''');
+    if (rows.isEmpty) {
+      _out.writeln('<tr><td colspan="8" class="empty">None</td></tr>');
+    }
+    rows.forEach(_writeRow);
+    _out.write('''
+</tbody>
+</table>
+</details>
+''');
+  }
+
+  void _writeRow(IssueAnalysis analysis) {
+    final IssueInfo issue = analysis.issue;
+    final DateTime now = generatedAt;
+    final classes = <String>[
+      if (analysis.urgency == Urgency.notYet && analysis.section != IssueSection.loadError)
+        'not-due',
+    ];
+    final String search = <Object>[
+      '#${issue.number}',
+      issue.title,
+      issue.author,
+      ...issue.labels,
+      ...issue.assignees,
+      analysis.nextStep,
+      if (analysis.isFollowUp) 'follow-up',
+    ].join(' ').toLowerCase();
+    final _Activity activity = _issueActivity(issue, now);
+    final waitingClass = analysis.section == IssueSection.loadError
+        ? 'waiting'
+        : 'waiting urgency-${analysis.urgency.name}';
+
+    _out
+      ..write('<tr')
+      ..write(classes.isEmpty ? '' : ' class="${classes.join(' ')}"')
+      ..write(' data-number="${issue.number}"')
+      ..write(' data-labels="${_escape(issue.labels.join('|'))}"')
+      ..write(analysis.isFollowUp ? ' data-followup="true"' : '')
+      ..write(' data-search="${_escape(search)}"')
+      ..write(' data-waiting="${analysis.waitingDays}"')
+      ..write(' data-activity="${activity.days}"')
+      ..write(' data-opened="${daysBetween(issue.creationDate, now)}"')
+      ..writeln('>')
+      ..write('<td class="pr"><a href="${_escape(issue.url)}" target="_blank" rel="noopener">')
+      ..write('#${issue.number}</a>')
+      ..write(
+        analysis.isFollowUp
+            ? ' <span class="badge follow-up" '
+                  'title="The author replied after the team\'s last comment">FOLLOW-UP</span>'
+            : '',
+      )
+      ..writeln('</td>')
+      ..write('<td class="title">${_escape(issue.title)}')
+      ..write(_issueLabelChips(issue))
+      ..writeln('</td>')
+      ..writeln(
+        '<td class="author">${emojiForContributorType(issue.authorType)} ${_escape(issue.author)}</td>',
+      )
+      ..writeln('<td class="next">${_escape(analysis.nextStep)}</td>')
+      ..writeln(
+        '<td class="$waitingClass" title="${_escape(analysis.reasons.join('\n'))}">'
+        '${_escape(issueWaitingLabel(analysis))}</td>',
+      )
+      ..write('<td class="reviewers">')
+      ..write(
+        issue.assignees.map((String a) => '<span class="reviewer">@${_escape(a)}</span>').join(' '),
+      )
+      ..writeln('</td>')
+      ..writeln(
+        '<td class="activity" title="${_escape(activity.details)}">'
+        '${_escape(activity.summary)}</td>',
+      )
+      ..writeln('<td class="opened">${formatAsDay(issue.creationDate)}</td>')
+      ..writeln('</tr>');
+  }
+
+  String _issueLabelChips(IssueInfo issue) {
+    final chips = <String>[
+      for (final String label in issue.labels)
+        if (isIssueDisplayLabel(label)) '<span class="label">${_escape(label)}</span>',
+    ];
+    return chips.isEmpty ? '' : '<div class="labels">${chips.join()}</div>';
+  }
+
+  void _writeLegend() {
+    _out.write('''
+<section class="legend">
+<h2>Legend</h2>
+<ul>
+<li>Actionable package issues from ${_escape(issuesRepo)} labeled <code>team-ecosystem</code> or <code>fyi-ecosystem</code>. Already-triaged P2/P3 issues that are not waiting on a response are omitted.</li>
+<li><span class="badge follow-up">FOLLOW-UP</span> issue author replied after a team member's comment.</li>
 </ul>
 </section>
 ''');
@@ -332,10 +580,47 @@ _Activity _activity(PRInfo pr, DateTime now) {
       days: days,
     );
   }
+  return _commentActivity(
+    authorComment: pr.authorComment,
+    authorFollowUpComment: pr.authorFollowUpComment,
+    memberComment: pr.memberComment,
+    nonMemberComment: pr.nonMemberComment,
+    creationDate: pr.creationDate,
+    now: now,
+  );
+}
+
+_Activity _issueActivity(IssueInfo issue, DateTime now) {
+  if (!issue.hasDetails) {
+    final int days = daysBetween(issue.updatedDate, now);
+    return (
+      summary: 'updated ${days}d ago',
+      details: 'Updated ${formatAsDay(issue.updatedDate)}. Comments were not fetched.',
+      days: days,
+    );
+  }
+  return _commentActivity(
+    authorComment: issue.authorComment,
+    authorFollowUpComment: issue.authorFollowUpComment,
+    memberComment: issue.memberComment,
+    nonMemberComment: issue.nonMemberComment,
+    creationDate: issue.creationDate,
+    now: now,
+  );
+}
+
+_Activity _commentActivity({
+  required Comment? authorComment,
+  required Comment? authorFollowUpComment,
+  required Comment? memberComment,
+  required Comment? nonMemberComment,
+  required DateTime creationDate,
+  required DateTime now,
+}) {
   final comments = <(String, Comment?)>[
-    ('author', pr.authorComment),
-    ('team', pr.memberComment),
-    ('other', pr.nonMemberComment),
+    ('author', authorComment),
+    ('team', memberComment),
+    ('other', nonMemberComment),
   ];
   final summary = <String>[];
   final details = <String>[];
@@ -352,9 +637,18 @@ _Activity _activity(PRInfo pr, DateTime now) {
       'Last $who comment: ${comment.username}, ${formatAsDay(comment.date)} (${days}d ago)',
     );
   }
+  if (authorFollowUpComment != null &&
+      authorComment != null &&
+      authorFollowUpComment.date != authorComment.date) {
+    final int days = daysBetween(authorFollowUpComment.date, now);
+    details.add(
+      'First follow-up after team: ${authorFollowUpComment.username}, '
+      '${formatAsDay(authorFollowUpComment.date)} (${days}d ago)',
+    );
+  }
   final DateTime newest =
-      newestComment(<Comment?>[pr.authorComment, pr.memberComment, pr.nonMemberComment])?.date ??
-      pr.creationDate;
+      newestComment(<Comment?>[authorComment, memberComment, nonMemberComment])?.date ??
+      creationDate;
   return (
     summary: summary.isEmpty ? 'no comments' : summary.join(' · '),
     details: details.join('\n'),
@@ -380,6 +674,7 @@ const String _css = r'''
   .meta, .note { color: #5f6368; }
   .controls { display: flex; gap: 8px; margin: 10px 0; }
   #filter { flex: 1; max-width: 36em; padding: 4px 8px; }
+  button[aria-pressed="true"] { background: #1a73e8; color: white; border: 1px solid #1557b0; border-radius: 4px; }
   .banner { background: #fce8e6; border: 1px solid #d93025; border-radius: 4px; padding: 8px; }
   details { margin: 14px 0; }
   summary { cursor: pointer; padding: 4px 0; }
@@ -399,6 +694,7 @@ const String _css = r'''
   .badge { display: inline-block; font-size: 0.7em; font-weight: bold; color: white; border-radius: 4px; padding: 1px 4px; vertical-align: middle; }
   .badge.new { background: #1e8e3e; }
   .badge.moved { background: #9334e6; }
+  .badge.follow-up { background: #d93025; }
   .urgency-notYet { color: green; }
   .urgency-due { color: #e37400; }
   .urgency-overdue { color: red; }
@@ -416,8 +712,10 @@ const String _script = r'''
   const storageKey = 'prTriage.showHidden';
   const filter = document.getElementById('filter');
   const toggle = document.getElementById('toggle-hidden');
+  const followUpToggle = document.getElementById('toggle-followup');
   const rows = Array.from(document.querySelectorAll('tbody tr[data-number]'));
   let showHidden = body.dataset.showHiddenDefault === 'true';
+  let onlyFollowUp = false;
   try {
     const saved = localStorage.getItem(storageKey);
     if (saved !== null) {
@@ -435,7 +733,9 @@ const String _script = r'''
   function update() {
     const query = filter.value.trim().toLowerCase();
     for (const row of rows) {
-      row.hidden = hiddenByLabel(row) || (query !== '' && !row.dataset.search.includes(query));
+      row.hidden = hiddenByLabel(row) ||
+          (onlyFollowUp && row.dataset.followup !== 'true') ||
+          (query !== '' && !row.dataset.search.includes(query));
     }
     for (const count of document.querySelectorAll('[data-count]')) {
       const section = document.getElementById(count.dataset.count);
@@ -446,6 +746,9 @@ const String _script = r'''
     if (toggle) {
       toggle.textContent = (showHidden ? 'Hide ' : 'Show ') + toggle.dataset.label;
       toggle.setAttribute('aria-pressed', String(showHidden));
+    }
+    if (followUpToggle) {
+      followUpToggle.setAttribute('aria-pressed', String(onlyFollowUp));
     }
   }
 
@@ -458,6 +761,12 @@ const String _script = r'''
       } catch (e) {
         // Not saved, but the toggle still works on this page.
       }
+      update();
+    });
+  }
+  if (followUpToggle) {
+    followUpToggle.addEventListener('click', () => {
+      onlyFollowUp = !onlyFollowUp;
       update();
     });
   }

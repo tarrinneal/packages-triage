@@ -213,6 +213,11 @@ Future<PRInfo> fetchPRDetails(
     for (final MapEntry<_CommentType, List<_Activity>> source in activity.entries) {
       _applyActivity(pr, source.key, source.value, roster);
     }
+    pr.authorFollowUpComment = _earliestAuthorFollowUp(
+      activity.values.expand((List<_Activity> items) => items),
+      author: pr.author,
+      memberComment: pr.memberComment,
+    );
     pr.hasDetails = true;
   }
 
@@ -223,6 +228,236 @@ Future<PRInfo> fetchPRDetails(
     pr.reviewers.putIfAbsent(reviewer, ReviewerStatus.new).requested = true;
   }
   return pr;
+}
+
+/// The repository where issues for [repo] are tracked.
+///
+/// `flutter/packages` tracks its issues in `flutter/flutter`.
+String defaultIssuesRepoFor(String repo) => repo == 'flutter/packages' ? 'flutter/flutter' : repo;
+
+/// Fetches open package issues in [issuesRepo] that may need triage or a
+/// follow-up from the team.
+///
+/// Queries GitHub's issue search API for:
+/// - untriaged `team-ecosystem` issues (`-label:triaged-ecosystem`),
+/// - untriaged `fyi-ecosystem` issues (`-label:triaged-ecosystem`),
+/// - open `P0` and `P1` `team-ecosystem` issues,
+/// - open `team-ecosystem` issues labeled `waiting for response`, and
+/// - recently updated `team-ecosystem` issues (to catch contributor follow-ups
+///   after a team member's comment).
+Future<List<Map<String, dynamic>>> fetchTriageIssues(
+  GitHubClient client,
+  String issuesRepo, {
+  required DateTime now,
+  int? limit,
+}) async {
+  final String recentCutoff = formatAsDay(now.subtract(const Duration(days: 60)));
+  final queries = <String>[
+    'repo:$issuesRepo is:issue is:open label:team-ecosystem -label:triaged-ecosystem',
+    'repo:$issuesRepo is:issue is:open label:fyi-ecosystem -label:triaged-ecosystem',
+    'repo:$issuesRepo is:issue is:open label:team-ecosystem label:P0,P1',
+    'repo:$issuesRepo is:issue is:open label:team-ecosystem label:"waiting for response"',
+    'repo:$issuesRepo is:issue is:open label:team-ecosystem updated:>=$recentCutoff',
+  ];
+  final byNumber = <int, Map<String, dynamic>>{};
+  for (final query in queries) {
+    final GitHubResponse response = await client.get(
+      _apiUrl('/search/issues', <String, String>{
+        'q': query,
+        'sort': 'updated',
+        'order': 'desc',
+        'per_page': '100',
+      }),
+    );
+    final List<Map<String, dynamic>> items =
+        ((response.json! as Map<String, dynamic>)['items'] as List<dynamic>? ?? const <dynamic>[])
+            .cast<Map<String, dynamic>>();
+    for (final item in items) {
+      if (item.containsKey('pull_request')) {
+        continue;
+      }
+      final number = item['number']! as int;
+      byNumber[number] = item;
+      if (limit != null && byNumber.length >= limit) {
+        return byNumber.values.take(limit).toList();
+      }
+    }
+  }
+  return byNumber.values.toList();
+}
+
+/// Builds an [IssueInfo] from a GitHub issue object, without comment data.
+IssueInfo issueInfoFromListing(Map<String, dynamic> issue, Set<String> roster) {
+  final user = issue['user']! as Map<String, dynamic>;
+  final login = user['login']! as String;
+  final association = issue['author_association'] as String?;
+  final ContributorType authorType;
+  if (isBot(login, userType: user['type'] as String?)) {
+    authorType = ContributorType.bot;
+  } else if (isTeamMember(login, association, roster)) {
+    authorType = ContributorType.member;
+  } else {
+    authorType = ContributorType.community;
+  }
+  return IssueInfo(
+    number: issue['number']! as int,
+    author: login,
+    title: issue['title']! as String,
+    url: issue['html_url']! as String,
+    creationDate: DateTime.parse(issue['created_at']! as String),
+    updatedDate: DateTime.parse(issue['updated_at']! as String),
+    authorType: authorType,
+    labels: <String>[
+      for (final Map<String, dynamic> label
+          in (issue['labels'] as List<dynamic>? ?? const <dynamic>[]).cast<Map<String, dynamic>>())
+        label['name']! as String,
+    ],
+    assignees: <String>[
+      for (final Map<String, dynamic> assignee
+          in (issue['assignees'] as List<dynamic>? ?? const <dynamic>[])
+              .cast<Map<String, dynamic>>())
+        assignee['login']! as String,
+    ],
+    commentCount: issue['comments'] as int? ?? -1,
+  );
+}
+
+/// Builds [IssueInfo]s for every entry in [issues], fetching comments for up
+/// to [concurrency] issues at a time.
+Future<List<IssueInfo>> fetchAllIssueDetails(
+  GitHubClient client,
+  String issuesRepo,
+  List<Map<String, dynamic>> issues,
+  Set<String> roster, {
+  int concurrency = 8,
+  DetailCache? cache,
+  void Function(int done, int total, IssueInfo issue)? onProgress,
+}) async {
+  final results = List<IssueInfo?>.filled(issues.length, null);
+  var next = 0;
+  var done = 0;
+  Future<void> worker() async {
+    while (next < issues.length) {
+      final int index = next++;
+      final IssueInfo issue = await fetchIssueDetails(
+        client,
+        issuesRepo,
+        issues[index],
+        roster,
+        cache: cache,
+      );
+      results[index] = issue;
+      done++;
+      onProgress?.call(done, issues.length, issue);
+    }
+  }
+
+  await Future.wait(<Future<void>>[for (var i = 0; i < concurrency; i++) worker()]);
+  return <IssueInfo>[for (final IssueInfo? issue in results) issue!];
+}
+
+/// Builds an [IssueInfo] from a GitHub issue entry and fetches its comments
+/// when needed.
+Future<IssueInfo> fetchIssueDetails(
+  GitHubClient client,
+  String issuesRepo,
+  Map<String, dynamic> listing,
+  Set<String> roster, {
+  DetailCache? cache,
+}) async {
+  final IssueInfo issue = issueInfoFromListing(listing, roster);
+  if (issue.commentCount == 0) {
+    issue.hasDetails = true;
+    return issue;
+  }
+  final updatedAt = listing['updated_at']! as String;
+  List<_Activity>? comments = _issueCommentsFromJson(cache?.lookup(issue.number, updatedAt));
+  if (comments == null) {
+    try {
+      comments = await _fetchComments(client, issuesRepo, issue.number, _CommentType.issue);
+      cache?.store(issue.number, updatedAt, _issueCommentsToJson(comments));
+    } on Exception catch (e) {
+      issue.fetchErrors.add('Failed to fetch issue comments: $e');
+      return issue;
+    }
+  }
+  for (final _Activity item in comments) {
+    final Comment currentComment = (username: item.login, date: item.date);
+    if (item.login == issue.author) {
+      if (issue.authorComment == null || item.date.isAfter(issue.authorComment!.date)) {
+        issue.authorComment = currentComment;
+      }
+    } else if (isTeamMember(item.login, item.association, roster)) {
+      if (issue.memberComment == null || item.date.isAfter(issue.memberComment!.date)) {
+        issue.memberComment = currentComment;
+      }
+    } else {
+      if (issue.nonMemberComment == null || item.date.isAfter(issue.nonMemberComment!.date)) {
+        issue.nonMemberComment = currentComment;
+      }
+    }
+  }
+  issue.authorFollowUpComment = _earliestAuthorFollowUp(
+    comments,
+    author: issue.author,
+    memberComment: issue.memberComment,
+  );
+  issue.hasDetails = true;
+  return issue;
+}
+
+Comment? _earliestAuthorFollowUp(
+  Iterable<_Activity> activity, {
+  required String author,
+  required Comment? memberComment,
+}) {
+  if (memberComment == null) {
+    return null;
+  }
+  Comment? earliest;
+  for (final item in activity) {
+    if (item.login == author && item.date.isAfter(memberComment.date)) {
+      if (earliest == null || item.date.isBefore(earliest.date)) {
+        earliest = (username: item.login, date: item.date);
+      }
+    }
+  }
+  return earliest;
+}
+
+Map<String, dynamic> _issueCommentsToJson(List<_Activity> comments) => <String, dynamic>{
+  'issue': <Map<String, Object?>>[
+    for (final _Activity item in comments)
+      <String, Object?>{
+        'login': item.login,
+        'association': item.association,
+        'date': item.date.toUtc().toIso8601String(),
+        'state': item.state,
+      },
+  ],
+};
+
+List<_Activity>? _issueCommentsFromJson(Map<String, dynamic>? json) {
+  final Object? items = json?['issue'];
+  if (items is! List<dynamic>) {
+    return null;
+  }
+  final list = <_Activity>[];
+  for (final Object? item in items) {
+    if (item case {
+      'login': final String login,
+      'association': final String? association,
+      'date': final String date,
+      'state': final String? state,
+    }) {
+      if (DateTime.tryParse(date) case final DateTime parsed) {
+        list.add((login: login, association: association, date: parsed, state: state));
+        continue;
+      }
+    }
+    return null;
+  }
+  return list;
 }
 
 enum _CommentType {

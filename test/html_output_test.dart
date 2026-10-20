@@ -291,4 +291,61 @@ void main() {
       expect(text, contains('    - Because'));
     });
   });
+
+  test('renders FOLLOW-UP badge and writes linked issues page', () {
+    final PRAnalysis pr = _analysis(1);
+    final followUpPr = PRAnalysis(
+      pr: pr.pr,
+      page: pr.page,
+      section: pr.section,
+      waitingSince: pr.waitingSince,
+      waitingDays: pr.waitingDays,
+      urgency: pr.urgency,
+      nextStep: pr.nextStep,
+      reasons: pr.reasons,
+      isFollowUp: true,
+    );
+    final issue = IssueInfo(
+      number: 42,
+      author: 'reporter',
+      title: 'Camera crash on iOS',
+      url: 'https://github.com/flutter/flutter/issues/42',
+      creationDate: _now.subtract(const Duration(days: 12)),
+      updatedDate: _now,
+      authorType: ContributorType.community,
+      labels: const <String>['team-ecosystem', 'p: camera'],
+    )..hasDetails = true;
+    final issueAnalysis = IssueAnalysis(
+      issue: issue,
+      section: IssueSection.untriaged,
+      waitingSince: issue.creationDate,
+      waitingDays: 12,
+      urgency: Urgency.due,
+      nextStep: 'Assign priority and add triaged-ecosystem',
+      reasons: const <String>['Missing triaged-ecosystem and priority label'],
+      isFollowUp: true,
+    );
+
+    writeHtmlReport(
+      repo: 'flutter/packages',
+      prs: <PRAnalysis>[followUpPr],
+      issues: <IssueAnalysis>[issueAnalysis],
+      issuesRepo: 'flutter/flutter',
+      communityFile: communityFile,
+      generatedAt: _now,
+    );
+
+    final String community = communityFile.readAsStringSync();
+    expect(community, contains('class="badge follow-up"'));
+    expect(community, contains('Follow-up PRs (1)'));
+    expect(community, contains('href="triage_issues.html">Issues (1)</a>'));
+
+    final File issuesFile = issuesPageFileFor(communityFile);
+    expect(issuesFile.existsSync(), isTrue);
+    final String issuesHtml = issuesFile.readAsStringSync();
+    expect(issuesHtml, contains('flutter/flutter · Package Issues'));
+    expect(issuesHtml, contains('#42</a>'));
+    expect(issuesHtml, contains('Camera crash on iOS'));
+    expect(issuesHtml, contains('class="badge follow-up"'));
+  });
 }
