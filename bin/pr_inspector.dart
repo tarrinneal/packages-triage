@@ -16,7 +16,7 @@ import 'package:pr_inspector/triage.dart';
 import 'package:pr_inspector/types.dart';
 import 'package:pr_inspector/utils.dart';
 
-const String _defaultRepo = 'flutter/packages';
+const List<String> _defaultRepos = <String>['flutter/packages', 'flutter/core-packages'];
 
 /// Thrown for invalid command-line usage.
 class _UsageException implements Exception {
@@ -68,10 +68,10 @@ Future<void> main(List<String> arguments) async {
   final File envFile = envFileFor(Platform.script);
   final usage =
       '''
-Usage: dart run bin/pr_inspector.dart [<owner>/<repo>] [options]
+Usage: dart run bin/pr_inspector.dart [<owner>/<repo> ...] [options]
 
-Sorts the open PRs in a repository ($_defaultRepo by default) by who needs to act next
-and how long they have been waiting.
+Sorts the open PRs in one or more repositories (${_defaultRepos.join(' and ')} by default)
+by who needs to act next and how long they have been waiting.
 
 Reads a GitHub token from the $tokenVariable environment variable if it is set, and
 otherwise from a "$tokenVariable=<token>" line in ${envFile.path}.
@@ -107,14 +107,18 @@ Future<void> _run(ArgResults results, String usage, File envFile) async {
     stdout.writeln(usage);
     return;
   }
-  if (results.rest.length > 1) {
-    throw _UsageException('Provide at most one repository (e.g., owner/repo).');
-  }
-  final String repo = results.rest.firstOrNull ?? _defaultRepo;
-  if (!RegExp(r'^[\w.-]+/[\w.-]+$').hasMatch(repo)) {
-    throw _UsageException('"$repo" is not a repository in owner/repo form.');
-  }
   final int? prNumber = _positiveInt(results, 'pr');
+  if (prNumber != null && results.rest.length > 1) {
+    throw _UsageException('Provide at most one repository when using --pr.');
+  }
+  final List<String> repos = results.rest.isNotEmpty
+      ? results.rest
+      : (prNumber != null ? <String>[_defaultRepos.first] : _defaultRepos);
+  for (final repo in repos) {
+    if (!RegExp(r'^[\w.-]+/[\w.-]+$').hasMatch(repo)) {
+      throw _UsageException('"$repo" is not a repository in owner/repo form.');
+    }
+  }
   final int? limit = _positiveInt(results, 'limit');
   final String? htmlPath = results.option('html');
   final String? recordPath = results.option('record');
@@ -154,39 +158,19 @@ Future<void> _run(ArgResults results, String usage, File envFile) async {
   final stopwatch = Stopwatch()..start();
   try {
     if (prNumber != null) {
-      await _explainPR(client, repo, prNumber);
+      await _explainPR(client, repos.first, prNumber);
     } else {
       final bool refresh = results.flag('refresh') || recordPath != null;
-      final String issuesRepo = defaultIssuesRepoFor(repo);
       await _report(
         client,
-        repo,
+        repos,
         limit: limit,
         htmlFile: htmlPath == null ? null : File(htmlPath),
         open: results.flag('open'),
         showHidden: showHidden,
         includeIssues: includeIssues,
         live: replayPath == null,
-        // Replays shouldn't change the cache. Recordings skip it so that they
-        // include every response.
-        cache: replayPath != null
-            ? null
-            : DetailCache.load(
-                detailCacheFileFor(repo),
-                repo: repo,
-                now: client.now,
-                refresh: refresh,
-                onWarning: _warn,
-              ),
-        issuesCache: replayPath != null || !includeIssues
-            ? null
-            : DetailCache.load(
-                detailCacheFileFor('${issuesRepo}_issues'),
-                repo: '$issuesRepo#issues',
-                now: client.now,
-                refresh: refresh,
-                onWarning: _warn,
-              ),
+        refresh: refresh,
       );
     }
   } on GitHubException catch (e) {
@@ -241,52 +225,91 @@ Future<void> _explainPR(GitHubClient client, String repo, int number) async {
 
 Future<void> _report(
   GitHubClient client,
-  String repo, {
+  List<String> repos, {
   required int? limit,
   required File? htmlFile,
   required bool open,
   required bool showHidden,
   required bool includeIssues,
   required bool live,
-  required DetailCache? cache,
-  required DetailCache? issuesCache,
+  required bool refresh,
 }) async {
-  stderr.writeln('Fetching open PRs in $repo...');
-  final List<Map<String, dynamic>> listing = await fetchOpenPRs(client, repo, limit: limit);
-  stderr.writeln(
-    limit == null
-        ? 'Found ${listing.length} open PRs.'
-        : 'Analyzing the ${listing.length} newest open PRs (--limit).',
-  );
-  final Set<String> roster = await fetchRoster(client, repo, listing, onWarning: _warn);
-
+  final DateTime now = client.now;
   final bool interactive = stderr.hasTerminal;
-  final List<PRInfo> prs = await fetchAllPRDetails(
-    client,
-    repo,
-    listing,
-    roster,
-    cache: cache,
-    onProgress: (int done, int total, PRInfo pr) {
-      if (interactive) {
-        stderr.write('\r[$done/$total] #${pr.number}   ');
-        if (done == total) {
-          stderr.writeln();
-        }
-      } else if (done % 25 == 0 || done == total) {
-        stderr.writeln('[$done/$total]');
+  final listingsByRepo = <String, List<Map<String, dynamic>>>{};
+  final roster = <String>{};
+
+  for (final repo in repos) {
+    try {
+      stderr.writeln('Fetching open PRs in $repo...');
+      final List<Map<String, dynamic>> listing = await fetchOpenPRs(client, repo, limit: limit);
+      stderr.writeln(
+        limit == null
+            ? 'Found ${listing.length} open PRs in $repo.'
+            : 'Analyzing the ${listing.length} newest open PRs in $repo (--limit).',
+      );
+      listingsByRepo[repo] = listing;
+      roster.addAll(await fetchRoster(client, repo, listing, onWarning: _warn));
+    } on GitHubException catch (e) {
+      if (!live && repo != repos.first) {
+        _warn('Recording does not include $repo ($e); skipping.');
+      } else {
+        rethrow;
       }
-    },
-  );
-  if (cache != null) {
-    _saveCache(cache, prs.map((PRInfo pr) => pr.number), label: 'PRs');
+    }
   }
 
-  final DateTime now = client.now;
-  final analyses = <PRAnalysis>[for (final PRInfo pr in prs) analyzePR(pr, now: now)]
+  final allPRs = <PRInfo>[];
+  for (final MapEntry<String, List<Map<String, dynamic>>> entry in listingsByRepo.entries) {
+    final String repo = entry.key;
+    final List<Map<String, dynamic>> listing = entry.value;
+    // Replays shouldn't change the cache. Recordings skip it so that they
+    // include every response.
+    final DetailCache? cache = !live
+        ? null
+        : DetailCache.load(
+            detailCacheFileFor(repo),
+            repo: repo,
+            now: now,
+            refresh: refresh,
+            onWarning: _warn,
+          );
+    final List<PRInfo> prs = await fetchAllPRDetails(
+      client,
+      repo,
+      listing,
+      roster,
+      cache: cache,
+      onProgress: (int done, int total, PRInfo pr) {
+        if (interactive) {
+          stderr.write('\r[$done/$total] $repo#${pr.number}   ');
+          if (done == total) {
+            stderr.writeln();
+          }
+        } else if (done % 25 == 0 || done == total) {
+          stderr.writeln('[$done/$total]');
+        }
+      },
+    );
+    if (cache != null) {
+      _saveCache(cache, prs.map((PRInfo pr) => pr.number), label: '$repo PRs');
+    }
+    allPRs.addAll(prs);
+  }
+
+  final analyses = <PRAnalysis>[for (final PRInfo pr in allPRs) analyzePR(pr, now: now)]
     ..sort(comparePRs);
 
-  final String issuesRepo = defaultIssuesRepoFor(repo);
+  final String issuesRepo = defaultIssuesRepoFor(repos.first);
+  final DetailCache? issuesCache = !live || !includeIssues
+      ? null
+      : DetailCache.load(
+          detailCacheFileFor('${issuesRepo}_issues'),
+          repo: '$issuesRepo#issues',
+          now: now,
+          refresh: refresh,
+          onWarning: _warn,
+        );
   final issueAnalyses = <IssueAnalysis>[];
   if (includeIssues) {
     try {
@@ -334,9 +357,10 @@ Future<void> _report(
     }
   }
 
+  final String repoLabel = repos.join(' + ');
   if (htmlFile == null) {
     printTextReport(
-      repo,
+      repoLabel,
       analyses,
       issues: issueAnalyses,
       issuesRepo: issuesRepo,
@@ -344,9 +368,11 @@ Future<void> _report(
     );
   } else {
     final File stateFile = stateFileFor(htmlFile);
-    final Map<int, PreviousPlacement>? previous = readReportState(stateFile, repo: repo);
+    final Map<int, PreviousPlacement>? previous =
+        readReportState(stateFile, repo: repoLabel) ??
+        readReportState(stateFile, repo: repos.first);
     writeHtmlReport(
-      repo: repo,
+      repo: repoLabel,
       prs: analyses,
       issues: issueAnalyses,
       issuesRepo: issuesRepo,
@@ -361,7 +387,7 @@ Future<void> _report(
     );
     // Partial and replayed runs would make the next report's badges wrong.
     if (limit == null && live) {
-      writeReportState(stateFile, analyses, repo: repo, generatedAt: now, previous: previous);
+      writeReportState(stateFile, analyses, repo: repoLabel, generatedAt: now, previous: previous);
     }
     stderr.writeln(
       'Wrote ${htmlFile.path}, ${teamPageFileFor(htmlFile).path}, '

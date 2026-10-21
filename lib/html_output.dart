@@ -264,6 +264,7 @@ $_css</style>
     final List<ReviewerEntry> reviewers = reviewerEntries(pr);
     final String search = <Object>[
       '#${pr.number}',
+      if (pr.repo.isNotEmpty) pr.repo,
       pr.title,
       pr.author,
       ...pr.labels,
@@ -331,6 +332,8 @@ $_css</style>
 
   String _labelChips(PRInfo pr) {
     final chips = <String>[
+      if (pr.repo.isNotEmpty && pr.repo != repo)
+        '<span class="label repo-label">${_escape(pr.repo.split('/').last)}</span>',
       for (final String label in pr.labels)
         if (isRoutingLabel(label) || hiddenLabels.contains(label)) _labelChip(label),
     ];
@@ -985,6 +988,11 @@ const String _css = r'''
     background: var(--hidden-chip-bg);
     color: var(--hidden-chip-text);
     border-color: transparent;
+  }
+  .label.repo-label {
+    font-weight: 600;
+    color: var(--link);
+    border-color: var(--link);
   }
   .label.priority-p0 {
     background: var(--urg-critical-bg);

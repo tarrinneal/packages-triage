@@ -113,7 +113,7 @@ Future<Set<String>> fetchRoster(
 }
 
 /// Builds a [PRInfo] from a PR listing entry, without comment or review data.
-PRInfo prInfoFromListing(Map<String, dynamic> pr, Set<String> roster) {
+PRInfo prInfoFromListing(Map<String, dynamic> pr, Set<String> roster, {String repo = ''}) {
   final user = pr['user']! as Map<String, dynamic>;
   final login = user['login']! as String;
   final association = pr['author_association'] as String?;
@@ -129,6 +129,7 @@ PRInfo prInfoFromListing(Map<String, dynamic> pr, Set<String> roster) {
       authorType == ContributorType.member && !_teamAssociations.contains(association);
   return PRInfo(
     number: pr['number']! as int,
+    repo: repo,
     author: login,
     title: pr['title']! as String,
     url: pr['html_url']! as String,
@@ -197,7 +198,7 @@ Future<PRInfo> fetchPRDetails(
   bool alwaysFetchDetails = false,
   DetailCache? cache,
 }) async {
-  final PRInfo pr = prInfoFromListing(listing, roster);
+  final PRInfo pr = prInfoFromListing(listing, roster, repo: repo);
   if (alwaysFetchDetails || !(pr.isDraft || pr.authorType == ContributorType.bot)) {
     final updatedAt = listing['updated_at']! as String;
     Map<_CommentType, List<_Activity>>? activity = _activityFromJson(
@@ -232,8 +233,10 @@ Future<PRInfo> fetchPRDetails(
 
 /// The repository where issues for [repo] are tracked.
 ///
-/// `flutter/packages` tracks its issues in `flutter/flutter`.
-String defaultIssuesRepoFor(String repo) => repo == 'flutter/packages' ? 'flutter/flutter' : repo;
+/// `flutter/packages` and `flutter/core-packages` track their issues in
+/// `flutter/flutter`.
+String defaultIssuesRepoFor(String repo) =>
+    (repo == 'flutter/packages' || repo == 'flutter/core-packages') ? 'flutter/flutter' : repo;
 
 /// Fetches open package issues in [issuesRepo] that may need triage or a
 /// follow-up from the team.

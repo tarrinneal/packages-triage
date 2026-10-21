@@ -69,12 +69,16 @@ class PRInfo {
     required this.updatedDate,
     required this.authorType,
     required this.isDraft,
+    this.repo = '',
     this.authorTypeFromRoster = false,
     this.labels = const <String>[],
   });
 
   /// The PR number.
   final int number;
+
+  /// The repository (`owner/name`) this PR belongs to, if known.
+  final String repo;
 
   /// The PR author's login.
   final String author;

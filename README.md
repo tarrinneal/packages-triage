@@ -29,8 +29,8 @@ GITHUB_TOKEN=github_pat_YOUR_TOKEN
 A fine-grained token with read-only access to public repositories is enough. A `GITHUB_TOKEN`
 environment variable, if set, takes precedence over the file.
 
-Then run the tool with an output file. The repository defaults to `flutter/packages`; pass
-another one (e.g. `flutter/core-packages`) as the first argument.
+Then run the tool with an output file. By default it inspects both `flutter/packages` and
+`flutter/core-packages`; pass one or more `owner/repo` arguments to override.
 
 ```sh
 dart run bin/pr_inspector.dart --html /tmp/triage.html --open

@@ -503,4 +503,13 @@ void main() {
       client.close();
     }
   });
+
+  test(
+    'defaultIssuesRepoFor maps flutter/packages and flutter/core-packages to flutter/flutter',
+    () {
+      expect(defaultIssuesRepoFor('flutter/packages'), 'flutter/flutter');
+      expect(defaultIssuesRepoFor('flutter/core-packages'), 'flutter/flutter');
+      expect(defaultIssuesRepoFor('other/repo'), 'other/repo');
+    },
+  );
 }

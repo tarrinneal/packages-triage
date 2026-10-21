@@ -350,4 +350,63 @@ void main() {
     expect(issuesHtml, contains('Camera crash on iOS'));
     expect(issuesHtml, contains('class="badge follow-up"'));
   });
+
+  test('renders repository chip when report covers multiple repos', () {
+    final pr1 = PRInfo(
+      repo: 'flutter/packages',
+      number: 101,
+      author: 'alice',
+      title: 'Packages PR',
+      url: 'https://github.com/flutter/packages/pull/101',
+      creationDate: _now.subtract(const Duration(days: 10)),
+      updatedDate: _now,
+      authorType: ContributorType.community,
+      isDraft: false,
+      labels: const <String>['p: camera'],
+    )..hasDetails = true;
+    final pr2 = PRInfo(
+      repo: 'flutter/core-packages',
+      number: 202,
+      author: 'bob',
+      title: 'Core Packages PR',
+      url: 'https://github.com/flutter/core-packages/pull/202',
+      creationDate: _now.subtract(const Duration(days: 10)),
+      updatedDate: _now,
+      authorType: ContributorType.community,
+      isDraft: false,
+      labels: const <String>['p: path'],
+    )..hasDetails = true;
+
+    writeHtmlReport(
+      repo: 'flutter/packages + flutter/core-packages',
+      prs: <PRAnalysis>[
+        PRAnalysis(
+          pr: pr1,
+          page: ReportPage.community,
+          section: Section.waitingOnTeam,
+          waitingSince: pr1.creationDate,
+          waitingDays: 10,
+          urgency: Urgency.due,
+          nextStep: 'Review',
+          reasons: const <String>['Reason'],
+        ),
+        PRAnalysis(
+          pr: pr2,
+          page: ReportPage.community,
+          section: Section.waitingOnTeam,
+          waitingSince: pr2.creationDate,
+          waitingDays: 10,
+          urgency: Urgency.due,
+          nextStep: 'Review',
+          reasons: const <String>['Reason'],
+        ),
+      ],
+      communityFile: communityFile,
+      generatedAt: _now,
+    );
+
+    final String html = communityFile.readAsStringSync();
+    expect(rowFor(html, 101), contains('<span class="label repo-label">packages</span>'));
+    expect(rowFor(html, 202), contains('<span class="label repo-label">core-packages</span>'));
+  });
 }
