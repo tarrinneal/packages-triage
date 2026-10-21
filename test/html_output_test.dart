@@ -151,14 +151,16 @@ void main() {
     expect(html, contains('Waiting on team (<span data-count="waitingOnTeam">1</span>)'));
   });
 
-  test('can show triage-design PRs by default', () {
+  test('can show only triage-design PRs by default', () {
     write(<PRAnalysis>[
       _analysis(1, labels: <String>['triage-design']),
+      _analysis(2),
     ], showHiddenByDefault: true);
     final String html = communityFile.readAsStringSync();
     expect(html, contains('data-show-hidden-default="true"'));
     expect(html, contains('>Hide triage-design PRs (1)</button>'));
     expect(rowFor(html, 1), isNot(contains(' hidden>')));
+    expect(rowFor(html, 2), contains(' hidden>'));
   });
 
   test('marks new and moved PRs', () {

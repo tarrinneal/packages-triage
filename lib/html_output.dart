@@ -123,7 +123,7 @@ class _PageRenderer {
   final StringBuffer _out = StringBuffer();
 
   bool _startsHidden(PRAnalysis analysis) =>
-      !showHiddenByDefault && hasHiddenLabel(analysis.pr, hiddenLabels);
+      hiddenLabels.isNotEmpty && showHiddenByDefault != hasHiddenLabel(analysis.pr, hiddenLabels);
 
   List<PRAnalysis> _inSection(Section section) =>
       pagePRs.where((PRAnalysis a) => a.section == section).toList();
@@ -1084,9 +1084,16 @@ const String _script = r'''
     // Storage may be unavailable for file: URLs; use the default.
   }
 
+  if (toggle && toggle.disabled) {
+    showHidden = false;
+  }
+
   function hiddenByLabel(row) {
-    return !showHidden &&
-        row.dataset.labels.split('|').some((label) => hiddenLabels.includes(label));
+    if (hiddenLabels.length === 0) {
+      return false;
+    }
+    const hasLabel = row.dataset.labels.split('|').some((label) => hiddenLabels.includes(label));
+    return showHidden ? !hasLabel : hasLabel;
   }
 
   function update() {
