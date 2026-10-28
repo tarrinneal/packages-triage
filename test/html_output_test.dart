@@ -135,21 +135,30 @@ void main() {
     expect(row, contains('data-waiting="10"'));
   });
 
-  test('hides triage-design PRs by default, with a button to show them', () {
-    write(<PRAnalysis>[
-      _analysis(1, labels: <String>['p: material_ui', 'triage-design']),
-      _analysis(2),
-    ]);
-    final String html = communityFile.readAsStringSync();
-    expect(html, contains('data-hidden-labels="triage-design"'));
-    expect(html, contains('data-label="triage-design PRs (1)"'));
-    expect(html, contains('>Show triage-design PRs (1)</button>'));
-    expect(rowFor(html, 1), contains(' hidden>'));
-    expect(rowFor(html, 1), contains('<span class="label hidden-label">triage-design</span>'));
-    expect(rowFor(html, 2), isNot(contains(' hidden>')));
-    // The section count only includes visible rows.
-    expect(html, contains('Waiting on team (<span data-count="waitingOnTeam">1</span>)'));
-  });
+  test(
+    'hides triage-design PRs by default, with checkboxes to show non-design, design, or both',
+    () {
+      write(<PRAnalysis>[
+        _analysis(1, labels: <String>['p: material_ui', 'triage-design']),
+        _analysis(2),
+      ]);
+      final String html = communityFile.readAsStringSync();
+      expect(html, contains('data-hidden-labels="triage-design"'));
+      expect(
+        html,
+        contains('<input id="show-non-design" type="checkbox" checked><span>Non-design (1)</span>'),
+      );
+      expect(
+        html,
+        contains('<input id="show-design" type="checkbox"><span>triage-design (1)</span>'),
+      );
+      expect(rowFor(html, 1), contains(' hidden>'));
+      expect(rowFor(html, 1), contains('<span class="label hidden-label">triage-design</span>'));
+      expect(rowFor(html, 2), isNot(contains(' hidden>')));
+      // The section count only includes visible rows.
+      expect(html, contains('Waiting on team (<span data-count="waitingOnTeam">1</span>)'));
+    },
+  );
 
   test('can show only triage-design PRs by default', () {
     write(<PRAnalysis>[
@@ -158,7 +167,14 @@ void main() {
     ], showHiddenByDefault: true);
     final String html = communityFile.readAsStringSync();
     expect(html, contains('data-show-hidden-default="true"'));
-    expect(html, contains('>Hide triage-design PRs (1)</button>'));
+    expect(
+      html,
+      contains('<input id="show-non-design" type="checkbox"><span>Non-design (1)</span>'),
+    );
+    expect(
+      html,
+      contains('<input id="show-design" type="checkbox" checked><span>triage-design (1)</span>'),
+    );
     expect(rowFor(html, 1), isNot(contains(' hidden>')));
     expect(rowFor(html, 2), contains(' hidden>'));
   });
@@ -408,5 +424,113 @@ void main() {
     final String html = communityFile.readAsStringSync();
     expect(rowFor(html, 101), contains('<span class="label repo-label">packages</span>'));
     expect(rowFor(html, 202), contains('<span class="label repo-label">core-packages</span>'));
+  });
+
+  test('renders refresh report button with 5-minute cooldown metadata on all pages', () {
+    write(<PRAnalysis>[_analysis(1)]);
+    final String community = communityFile.readAsStringSync();
+    final String team = teamPageFileFor(communityFile).readAsStringSync();
+    final String issues = issuesPageFileFor(communityFile).readAsStringSync();
+
+    for (final pageHtml in <String>[community, team, issues]) {
+      expect(pageHtml, contains('id="refresh-report"'));
+      expect(pageHtml, contains('>↻ Refresh report</button>'));
+      expect(pageHtml, contains('data-generated-at="2026-10-01T12:00:00.000Z"'));
+      expect(pageHtml, contains('data-workflow-repo="tarrinneal/packages-triage"'));
+      expect(pageHtml, contains('const cooldownMs = 5 * 60 * 1000;'));
+    }
+  });
+
+  test('hides waiting-for-response items by default with a checked filter checkbox', () {
+    final issue = IssueInfo(
+      number: 99,
+      author: 'reporter',
+      title: 'Waiting issue',
+      url: 'https://github.com/flutter/flutter/issues/99',
+      creationDate: _now.subtract(const Duration(days: 10)),
+      updatedDate: _now,
+      authorType: ContributorType.community,
+      labels: const <String>['team-ecosystem', 'waiting-for-response'],
+    )..hasDetails = true;
+    final issueAnalysis = IssueAnalysis(
+      issue: issue,
+      section: IssueSection.untriaged,
+      waitingSince: issue.creationDate,
+      waitingDays: 10,
+      urgency: Urgency.due,
+      nextStep: 'Triage',
+      reasons: const <String>['Untriaged'],
+    );
+
+    writeHtmlReport(
+      repo: 'o/r',
+      prs: <PRAnalysis>[
+        _analysis(1, labels: <String>['waiting-for-response']),
+        _analysis(2),
+      ],
+      issues: <IssueAnalysis>[issueAnalysis],
+      communityFile: communityFile,
+      generatedAt: _now,
+    );
+
+    final String community = communityFile.readAsStringSync();
+    expect(
+      community,
+      contains(
+        '<input id="hide-waiting-response" type="checkbox" checked>'
+        '<span>Hide waiting-for-response (1)</span>',
+      ),
+    );
+    expect(rowFor(community, 1), contains('data-waiting-response="true"'));
+    expect(rowFor(community, 1), contains(' hidden>'));
+    expect(rowFor(community, 2), isNot(contains(' hidden>')));
+    expect(community, contains('Waiting on team (<span data-count="waitingOnTeam">1</span>)'));
+
+    final String issuesHtml = issuesPageFileFor(communityFile).readAsStringSync();
+    expect(
+      issuesHtml,
+      contains(
+        '<input id="hide-waiting-response" type="checkbox" checked>'
+        '<span>Hide waiting-for-response (1)</span>',
+      ),
+    );
+    expect(rowFor(issuesHtml, 99), contains('data-waiting-response="true"'));
+    expect(rowFor(issuesHtml, 99), contains(' hidden>'));
+    expect(
+      issuesHtml,
+      contains('Untriaged (team-ecosystem) (<span data-count="untriaged">0</span>)'),
+    );
+  });
+
+  test('renders Open first 10 and Open all buttons on each section', () {
+    write(<PRAnalysis>[_analysis(1)]);
+    final String community = communityFile.readAsStringSync();
+    final String issuesHtml = issuesPageFileFor(communityFile).readAsStringSync();
+
+    // waitingOnTeam has 1 visible PR -> buttons enabled
+    expect(
+      community,
+      contains(
+        '<h2>Waiting on team (<span data-count="waitingOnTeam">1</span>)</h2>'
+        '<span class="section-actions">'
+        '<button type="button" class="section-btn open-batch">Open first 10</button>'
+        '<button type="button" class="section-btn open-all">Open all</button>'
+        '</span>',
+      ),
+    );
+    // needsReviewer has 0 visible PRs -> buttons disabled
+    expect(
+      community,
+      contains(
+        '<h2>Needs reviewer (<span data-count="needsReviewer">0</span>)</h2>'
+        '<span class="section-actions">'
+        '<button type="button" class="section-btn open-batch" disabled>Open first 10</button>'
+        '<button type="button" class="section-btn open-all" disabled>Open all</button>'
+        '</span>',
+      ),
+    );
+    expect(community, contains("offset > 0 ? 'Open next 10' : 'Open first 10'"));
+    expect(issuesHtml, contains('class="section-btn open-batch"'));
+    expect(issuesHtml, contains('class="section-btn open-all"'));
   });
 }

@@ -357,13 +357,23 @@ String? issuePriority(IssueInfo issue) {
   return null;
 }
 
+/// Labels indicating that an item is waiting on a response from the author.
+const Set<String> waitingForResponseLabels = <String>{
+  'waiting for response',
+  'waiting-for-response',
+  'waiting for customer response',
+};
+
+/// Whether [labels] includes any of [waitingForResponseLabels].
+bool hasWaitingForResponseLabel(Iterable<String> labels) =>
+    labels.any(waitingForResponseLabels.contains);
+
 /// Whether [label] is useful to display on an issue row.
 bool isIssueDisplayLabel(String label) =>
     isRoutingLabel(label) ||
     priorityLabels.contains(label) ||
     label == 'fyi-ecosystem' ||
-    label == 'waiting for response' ||
-    label == 'waiting for customer response';
+    waitingForResponseLabels.contains(label);
 
 /// The heading for [section] on the issues page.
 String issueSectionTitle(IssueSection section) => switch (section) {
@@ -431,9 +441,7 @@ IssueAnalysis? analyzeIssue(IssueInfo issue, {required DateTime now}) {
   final bool isFyiEcosystem = issue.labels.contains('fyi-ecosystem');
   final bool isTriaged = issue.labels.contains('triaged-ecosystem');
   final String? priority = issuePriority(issue);
-  final bool hasWaitingForResponse = issue.labels.any(
-    (String label) => label == 'waiting for response' || label == 'waiting for customer response',
-  );
+  final bool hasWaitingForResponse = hasWaitingForResponseLabel(issue.labels);
 
   final DateTime lastAuthorCommentDate = issue.authorComment?.date ?? issue.creationDate;
   final DateTime? lastMemberCommentDate = issue.memberComment?.date;

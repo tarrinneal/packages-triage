@@ -123,7 +123,9 @@ class _PageRenderer {
   final StringBuffer _out = StringBuffer();
 
   bool _startsHidden(PRAnalysis analysis) =>
-      hiddenLabels.isNotEmpty && showHiddenByDefault != hasHiddenLabel(analysis.pr, hiddenLabels);
+      (hiddenLabels.isNotEmpty &&
+          showHiddenByDefault != hasHiddenLabel(analysis.pr, hiddenLabels)) ||
+      hasWaitingForResponseLabel(analysis.pr.labels);
 
   List<PRAnalysis> _inSection(Section section) =>
       pagePRs.where((PRAnalysis a) => a.section == section).toList();
@@ -160,7 +162,7 @@ class _PageRenderer {
 <style>
 $_css</style>
 </head>
-<body data-hidden-labels="${_escape(hiddenLabels.join('|'))}" data-show-hidden-default="$showHiddenByDefault">
+<body data-hidden-labels="${_escape(hiddenLabels.join('|'))}" data-show-hidden-default="$showHiddenByDefault" data-generated-at="${_escape(generatedAt.toUtc().toIso8601String())}" data-workflow-repo="tarrinneal/packages-triage">
 ''');
   }
 
@@ -174,8 +176,12 @@ $_css</style>
     final int hiddenCount = pagePRs
         .where((PRAnalysis a) => hasHiddenLabel(a.pr, hiddenLabels))
         .length;
+    final int nonHiddenCount = pagePRs.length - hiddenCount;
+    final int waitingResponseCount = pagePRs
+        .where((PRAnalysis a) => hasWaitingForResponseLabel(a.pr.labels))
+        .length;
     final int followUpCount = pagePRs.where((PRAnalysis a) => a.isFollowUp).length;
-    final buttonLabel = '${hiddenLabels.join('/')} PRs ($hiddenCount)';
+    final hiddenLabel = hiddenLabels.join('/');
     final int failed = _inSection(Section.loadError).length;
     _out.write('''
 <header>
@@ -189,12 +195,22 @@ $_css</style>
 ''');
     if (hiddenLabels.isNotEmpty) {
       _out.writeln(
-        '<button id="toggle-hidden" type="button" data-label="${_escape(buttonLabel)}" '
-        'aria-pressed="$showHiddenByDefault"${hiddenCount == 0 ? ' disabled' : ''}>'
-        '${showHiddenByDefault ? 'Hide' : 'Show'} ${_escape(buttonLabel)}</button>',
+        '<div class="filter-group" role="group" aria-label="Design filter">'
+        '<label class="filter-chip"><input id="show-non-design" type="checkbox"${showHiddenByDefault ? '' : ' checked'}>'
+        '<span>Non-design ($nonHiddenCount)</span></label>'
+        '<label class="filter-chip"><input id="show-design" type="checkbox"${showHiddenByDefault ? ' checked' : ''}>'
+        '<span>${_escape(hiddenLabel)} ($hiddenCount)</span></label>'
+        '</div>',
       );
     }
-    _out.writeln('</div>');
+    _out
+      ..writeln(
+        '<label class="filter-chip"><input id="hide-waiting-response" type="checkbox" checked>'
+        '<span>Hide waiting-for-response ($waitingResponseCount)</span></label>',
+      )
+      ..writeln('<button id="refresh-report" type="button">↻ Refresh report</button>')
+      ..writeln('<span id="refresh-status" class="refresh-status" aria-live="polite"></span>')
+      ..writeln('</div>');
     if (failed > 0) {
       _out.writeln(
         '<p class="banner">⚠️ $failed ${failed == 1 ? 'PR' : 'PRs'} failed to load, so '
@@ -223,10 +239,12 @@ $_css</style>
 
   void _writeSection(Section section) {
     final List<PRAnalysis> rows = _inSection(section);
+    final int visible = _visibleCount(section);
     final bool open = section != Section.bots && section != Section.drafts;
+    final disabledAttr = visible == 0 ? ' disabled' : '';
     _out.write('''
 <details id="${section.name}" data-section="${section.name}"${open ? ' open' : ''}>
-<summary><h2>${_escape(sectionTitle(section, page))} (<span data-count="${section.name}">${_visibleCount(section)}</span>)</h2></summary>
+<summary><h2>${_escape(sectionTitle(section, page))} (<span data-count="${section.name}">$visible</span>)</h2><span class="section-actions"><button type="button" class="section-btn open-batch"$disabledAttr>Open first 10</button><button type="button" class="section-btn open-all"$disabledAttr>Open all</button></span></summary>
 <table>
 <thead>
 <tr>
@@ -282,6 +300,7 @@ $_css</style>
       ..write(classes.isEmpty ? '' : ' class="${classes.join(' ')}"')
       ..write(' data-number="${pr.number}"')
       ..write(' data-labels="${_escape(pr.labels.join('|'))}"')
+      ..write(hasWaitingForResponseLabel(pr.labels) ? ' data-waiting-response="true"' : '')
       ..write(analysis.isFollowUp ? ' data-followup="true"' : '')
       ..write(' data-search="${_escape(search)}"')
       ..write(' data-waiting="${analysis.waitingDays}"')
@@ -335,7 +354,10 @@ $_css</style>
       if (pr.repo.isNotEmpty && pr.repo != repo)
         '<span class="label repo-label">${_escape(pr.repo.split('/').last)}</span>',
       for (final String label in pr.labels)
-        if (isRoutingLabel(label) || hiddenLabels.contains(label)) _labelChip(label),
+        if (isRoutingLabel(label) ||
+            hiddenLabels.contains(label) ||
+            waitingForResponseLabels.contains(label))
+          _labelChip(label),
     ];
     return chips.isEmpty ? '' : '<div class="labels">${chips.join()}</div>';
   }
@@ -382,8 +404,13 @@ class _IssuesPageRenderer {
 
   final StringBuffer _out = StringBuffer();
 
+  bool _startsHidden(IssueAnalysis analysis) => hasWaitingForResponseLabel(analysis.issue.labels);
+
   List<IssueAnalysis> _inSection(IssueSection section) =>
       issues.where((IssueAnalysis a) => a.section == section).toList();
+
+  int _visibleCount(IssueSection section) =>
+      _inSection(section).where((IssueAnalysis a) => !_startsHidden(a)).length;
 
   String render() {
     final sections = <IssueSection>[
@@ -400,7 +427,7 @@ class _IssuesPageRenderer {
 <style>
 $_css</style>
 </head>
-<body data-hidden-labels="" data-show-hidden-default="true">
+<body data-hidden-labels="" data-show-hidden-default="true" data-generated-at="${_escape(generatedAt.toUtc().toIso8601String())}" data-workflow-repo="tarrinneal/packages-triage">
 ''');
     _writeHeader(sections);
     sections.forEach(_writeSection);
@@ -422,6 +449,9 @@ $_css</style>
     ];
     final sectionLinks = <String>[for (final section in sections) _sectionLink(section)];
     final int followUpCount = issues.where((IssueAnalysis a) => a.isFollowUp).length;
+    final int waitingResponseCount = issues
+        .where((IssueAnalysis a) => hasWaitingForResponseLabel(a.issue.labels))
+        .length;
     final int failed = _inSection(IssueSection.loadError).length;
     _out.write('''
 <header>
@@ -432,6 +462,9 @@ $_css</style>
 <div class="controls">
 <input id="filter" type="search" placeholder="Filter by number, title, author, label, assignee, or next step" autocomplete="off">
 <button id="toggle-followup" type="button" aria-pressed="false"${followUpCount == 0 ? ' disabled' : ''}>Follow-up issues ($followUpCount)</button>
+<label class="filter-chip"><input id="hide-waiting-response" type="checkbox" checked><span>Hide waiting-for-response ($waitingResponseCount)</span></label>
+<button id="refresh-report" type="button">↻ Refresh report</button>
+<span id="refresh-status" class="refresh-status" aria-live="polite"></span>
 </div>
 ''');
     if (failed > 0) {
@@ -453,13 +486,15 @@ $_css</style>
 
   String _sectionLink(IssueSection section) =>
       '<a href="#${section.name}">${_escape(issueSectionTitle(section))} '
-      '(<span data-count="${section.name}">${_inSection(section).length}</span>)</a>';
+      '(<span data-count="${section.name}">${_visibleCount(section)}</span>)</a>';
 
   void _writeSection(IssueSection section) {
     final List<IssueAnalysis> rows = _inSection(section);
+    final int visible = _visibleCount(section);
+    final disabledAttr = visible == 0 ? ' disabled' : '';
     _out.write('''
 <details id="${section.name}" data-section="${section.name}" open>
-<summary><h2>${_escape(issueSectionTitle(section))} (<span data-count="${section.name}">${rows.length}</span>)</h2></summary>
+<summary><h2>${_escape(issueSectionTitle(section))} (<span data-count="${section.name}">$visible</span>)</h2><span class="section-actions"><button type="button" class="section-btn open-batch"$disabledAttr>Open first 10</button><button type="button" class="section-btn open-all"$disabledAttr>Open all</button></span></summary>
 <table>
 <thead>
 <tr>
@@ -512,11 +547,13 @@ $_css</style>
       ..write(classes.isEmpty ? '' : ' class="${classes.join(' ')}"')
       ..write(' data-number="${issue.number}"')
       ..write(' data-labels="${_escape(issue.labels.join('|'))}"')
+      ..write(hasWaitingForResponseLabel(issue.labels) ? ' data-waiting-response="true"' : '')
       ..write(analysis.isFollowUp ? ' data-followup="true"' : '')
       ..write(' data-search="${_escape(search)}"')
       ..write(' data-waiting="${analysis.waitingDays}"')
       ..write(' data-activity="${activity.days}"')
       ..write(' data-opened="${daysBetween(issue.creationDate, now)}"')
+      ..write(_startsHidden(analysis) ? ' hidden' : '')
       ..writeln('>')
       ..write('<td class="pr"><a href="${_escape(issue.url)}" target="_blank" rel="noopener">')
       ..write('#${issue.number}</a>')
@@ -1069,6 +1106,102 @@ const String _css = r'''
   }
   .legend ul { margin: 0; padding-left: 18px; }
   .legend li { margin: 4px 0; }
+  .refresh-status {
+    font-size: 0.82rem;
+    color: var(--muted);
+  }
+  .filter-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    background: var(--table-head-bg);
+    padding: 3px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+  }
+  .filter-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 0.84rem;
+    font-weight: 500;
+    padding: 7px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--chip-border);
+    background: var(--btn-bg);
+    color: var(--muted);
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.15s, border-color 0.15s, color 0.15s, box-shadow 0.15s;
+  }
+  .filter-group .filter-chip {
+    padding: 5px 11px;
+    border-radius: 7px;
+    border-color: transparent;
+    background: transparent;
+  }
+  .filter-chip:hover {
+    color: var(--text);
+    background: var(--btn-hover);
+    border-color: var(--muted);
+  }
+  .filter-group .filter-chip:hover {
+    border-color: transparent;
+    background: rgba(148, 163, 184, 0.12);
+  }
+  .filter-chip:has(input:checked) {
+    color: var(--text);
+    background: var(--card-bg);
+    border-color: var(--link);
+    box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.12);
+  }
+  .filter-group .filter-chip:has(input:checked) {
+    background: var(--card-bg);
+    border-color: var(--border);
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+  }
+  .filter-chip input[type="checkbox"] {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 15px;
+    height: 15px;
+    margin: 0;
+    border-radius: 4px;
+    border: 1.5px solid var(--chip-border);
+    background: var(--bg);
+    display: inline-grid;
+    place-content: center;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .filter-chip input[type="checkbox"]::before {
+    content: "";
+    width: 8px;
+    height: 5px;
+    border-left: 2px solid #ffffff;
+    border-bottom: 2px solid #ffffff;
+    transform: rotate(-45deg) translate(0.5px, -0.5px) scale(0);
+    transition: transform 0.12s ease-in-out;
+  }
+  .filter-chip input[type="checkbox"]:checked {
+    background: var(--btn-active-bg);
+    border-color: var(--btn-active-border);
+  }
+  .filter-chip input[type="checkbox"]:checked::before {
+    transform: rotate(-45deg) translate(0.5px, -0.5px) scale(1);
+  }
+  .section-actions {
+    float: right;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: -3px;
+  }
+  .section-btn {
+    font-size: 0.78rem;
+    padding: 4px 10px;
+    border-radius: 6px;
+  }
 ''';
 
 const String _script = r'''
@@ -1076,24 +1209,44 @@ const String _script = r'''
   'use strict';
   const body = document.body;
   const hiddenLabels = (body.dataset.hiddenLabels || '').split('|').filter((label) => label !== '');
-  const storageKey = 'prTriage.showHidden';
+  const nonDesignStorageKey = 'prTriage.showNonDesign';
+  const designStorageKey = 'prTriage.showDesign';
+  const waitingResponseStorageKey = 'prTriage.hideWaitingForResponse';
+  const tokenStorageKey = 'prTriage.githubToken';
+  const lastRunStorageKey = 'prTriage.lastWorkflowRunAt';
+  const cooldownMs = 5 * 60 * 1000;
   const filter = document.getElementById('filter');
-  const toggle = document.getElementById('toggle-hidden');
+  const showNonDesignCheckbox = document.getElementById('show-non-design');
+  const showDesignCheckbox = document.getElementById('show-design');
   const followUpToggle = document.getElementById('toggle-followup');
+  const hideWaitingCheckbox = document.getElementById('hide-waiting-response');
+  const refreshButton = document.getElementById('refresh-report');
+  const refreshStatus = document.getElementById('refresh-status');
   const rows = Array.from(document.querySelectorAll('tbody tr[data-number]'));
-  let showHidden = body.dataset.showHiddenDefault === 'true';
+  const sections = Array.from(document.querySelectorAll('details[data-section]'));
+  const showHiddenDefault = body.dataset.showHiddenDefault === 'true';
+  let showNonDesign = showNonDesignCheckbox ? showNonDesignCheckbox.checked : !showHiddenDefault;
+  let showDesign = showDesignCheckbox ? showDesignCheckbox.checked : showHiddenDefault;
+  let hideWaitingResponse = hideWaitingCheckbox ? hideWaitingCheckbox.checked : true;
   let onlyFollowUp = false;
   try {
-    const saved = localStorage.getItem(storageKey);
-    if (saved !== null) {
-      showHidden = saved === 'true';
+    const savedNonDesign = localStorage.getItem(nonDesignStorageKey);
+    const savedDesign = localStorage.getItem(designStorageKey);
+    if (savedNonDesign !== null) {
+      showNonDesign = savedNonDesign === 'true';
+    }
+    if (savedDesign !== null) {
+      showDesign = savedDesign === 'true';
+    }
+    if (!showNonDesign && !showDesign) {
+      showNonDesign = true;
+    }
+    const savedWaiting = localStorage.getItem(waitingResponseStorageKey);
+    if (savedWaiting !== null) {
+      hideWaitingResponse = savedWaiting === 'true';
     }
   } catch (e) {
     // Storage may be unavailable for file: URLs; use the default.
-  }
-
-  if (toggle && toggle.disabled) {
-    showHidden = false;
   }
 
   function hiddenByLabel(row) {
@@ -1101,13 +1254,47 @@ const String _script = r'''
       return false;
     }
     const hasLabel = row.dataset.labels.split('|').some((label) => hiddenLabels.includes(label));
-    return showHidden ? !hasLabel : hasLabel;
+    return hasLabel ? !showDesign : !showNonDesign;
+  }
+
+  function saveDesignPrefs() {
+    try {
+      localStorage.setItem(nonDesignStorageKey, String(showNonDesign));
+      localStorage.setItem(designStorageKey, String(showDesign));
+    } catch (e) {
+      // Not saved, but the checkboxes still work on this page.
+    }
+  }
+
+  function visibleLinks(sectionEl) {
+    return Array.from(
+      sectionEl.querySelectorAll('tbody tr[data-number]:not([hidden]) td.pr a[href]')
+    ).map((a) => a.href).filter(Boolean);
+  }
+
+  function syncSectionButtons(sectionEl) {
+    const links = visibleLinks(sectionEl);
+    let offset = Number(sectionEl.dataset.batchOffset || '0');
+    if (offset >= links.length) {
+      offset = 0;
+      sectionEl.dataset.batchOffset = '0';
+    }
+    const batchBtn = sectionEl.querySelector('.open-batch');
+    const allBtn = sectionEl.querySelector('.open-all');
+    if (batchBtn) {
+      batchBtn.disabled = links.length === 0;
+      batchBtn.textContent = offset > 0 ? 'Open next 10' : 'Open first 10';
+    }
+    if (allBtn) {
+      allBtn.disabled = links.length === 0;
+    }
   }
 
   function update() {
     const query = filter.value.trim().toLowerCase();
     for (const row of rows) {
       row.hidden = hiddenByLabel(row) ||
+          (hideWaitingResponse && row.dataset.waitingResponse === 'true') ||
           (onlyFollowUp && row.dataset.followup !== 'true') ||
           (query !== '' && !row.dataset.search.includes(query));
     }
@@ -1117,12 +1304,55 @@ const String _script = r'''
           ? section.querySelectorAll('tbody tr[data-number]:not([hidden])').length
           : '0';
     }
-    if (toggle) {
-      toggle.textContent = (showHidden ? 'Hide ' : 'Show ') + toggle.dataset.label;
-      toggle.setAttribute('aria-pressed', String(showHidden));
+    for (const sectionEl of sections) {
+      sectionEl.dataset.batchOffset = '0';
+      syncSectionButtons(sectionEl);
+    }
+    if (showNonDesignCheckbox) {
+      showNonDesignCheckbox.checked = showNonDesign;
+    }
+    if (showDesignCheckbox) {
+      showDesignCheckbox.checked = showDesign;
     }
     if (followUpToggle) {
       followUpToggle.setAttribute('aria-pressed', String(onlyFollowUp));
+    }
+    if (hideWaitingCheckbox) {
+      hideWaitingCheckbox.checked = hideWaitingResponse;
+    }
+  }
+
+  for (const sectionEl of sections) {
+    const batchBtn = sectionEl.querySelector('.open-batch');
+    const allBtn = sectionEl.querySelector('.open-all');
+    if (batchBtn) {
+      batchBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const links = visibleLinks(sectionEl);
+        if (links.length === 0) {
+          return;
+        }
+        let offset = Number(sectionEl.dataset.batchOffset || '0');
+        if (offset >= links.length) {
+          offset = 0;
+        }
+        for (const url of links.slice(offset, offset + 10)) {
+          window.open(url, '_blank', 'noopener');
+        }
+        const nextOffset = offset + 10;
+        sectionEl.dataset.batchOffset = nextOffset < links.length ? String(nextOffset) : '0';
+        syncSectionButtons(sectionEl);
+      });
+    }
+    if (allBtn) {
+      allBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        for (const url of visibleLinks(sectionEl)) {
+          window.open(url, '_blank', 'noopener');
+        }
+      });
     }
   }
 
@@ -1137,14 +1367,23 @@ const String _script = r'''
       update();
     }
   });
-  if (toggle) {
-    toggle.addEventListener('click', () => {
-      showHidden = !showHidden;
-      try {
-        localStorage.setItem(storageKey, String(showHidden));
-      } catch (e) {
-        // Not saved, but the toggle still works on this page.
+  if (showNonDesignCheckbox) {
+    showNonDesignCheckbox.addEventListener('change', () => {
+      showNonDesign = showNonDesignCheckbox.checked;
+      if (!showNonDesign && !showDesign) {
+        showDesign = true;
       }
+      saveDesignPrefs();
+      update();
+    });
+  }
+  if (showDesignCheckbox) {
+    showDesignCheckbox.addEventListener('change', () => {
+      showDesign = showDesignCheckbox.checked;
+      if (!showDesign && !showNonDesign) {
+        showNonDesign = true;
+      }
+      saveDesignPrefs();
       update();
     });
   }
@@ -1153,6 +1392,206 @@ const String _script = r'''
       onlyFollowUp = !onlyFollowUp;
       update();
     });
+  }
+  if (hideWaitingCheckbox) {
+    hideWaitingCheckbox.addEventListener('change', () => {
+      hideWaitingResponse = hideWaitingCheckbox.checked;
+      try {
+        localStorage.setItem(waitingResponseStorageKey, String(hideWaitingResponse));
+      } catch (e) {
+        // Not saved, but the checkbox still works on this page.
+      }
+      update();
+    });
+  }
+
+  if (refreshButton) {
+    const hostMatch = window.location.hostname.match(/^([^.]+)\.github\.io$/);
+    const pathSeg = window.location.pathname.split('/').filter(Boolean)[0];
+    const workflowRepo = (hostMatch && pathSeg)
+        ? `${hostMatch[1]}/${pathSeg}`
+        : (body.dataset.workflowRepo || 'tarrinneal/packages-triage');
+    const runsApiUrl = `https://api.github.com/repos/${workflowRepo}/actions/workflows/deploy_pages.yml/runs?per_page=10`;
+    const dispatchApiUrl = `https://api.github.com/repos/${workflowRepo}/actions/workflows/deploy_pages.yml/dispatches`;
+    const actionsHtmlUrl = `https://github.com/${workflowRepo}/actions/workflows/deploy_pages.yml`;
+
+    let lastRunTimeMs = Date.parse(body.dataset.generatedAt || '') || 0;
+    try {
+      const savedLastRun = Number(localStorage.getItem(lastRunStorageKey));
+      if (savedLastRun > lastRunTimeMs) {
+        lastRunTimeMs = savedLastRun;
+      }
+    } catch (e) {
+      // Ignore storage errors.
+    }
+    let runInProgress = false;
+    let pollTimer = null;
+
+    function formatRemaining(ms) {
+      const totalSec = Math.max(1, Math.ceil(ms / 1000));
+      const min = Math.floor(totalSec / 60);
+      const sec = totalSec % 60;
+      return min > 0 ? `${min}m ${String(sec).padStart(2, '0')}s` : `${sec}s`;
+    }
+
+    function syncRefreshButton() {
+      if (runInProgress) {
+        refreshButton.disabled = true;
+        refreshButton.textContent = '↻ Running action…';
+        refreshButton.title = 'GitHub Action is currently running.';
+        return;
+      }
+      const elapsed = Date.now() - lastRunTimeMs;
+      if (lastRunTimeMs > 0 && elapsed < cooldownMs) {
+        refreshButton.disabled = true;
+        refreshButton.textContent = `↻ Refresh in ${formatRemaining(cooldownMs - elapsed)}`;
+        refreshButton.title = 'Action can only be run at least 5 minutes after the last run.';
+      } else {
+        refreshButton.disabled = false;
+        refreshButton.textContent = '↻ Refresh report';
+        refreshButton.title = 'Trigger the GitHub Action to rebuild and deploy this report.';
+      }
+    }
+
+    async function checkWorkflowRuns() {
+      try {
+        const res = await fetch(runsApiUrl, {
+          headers: { 'Accept': 'application/vnd.github+json' },
+          cache: 'no-store',
+        });
+        if (!res.ok) {
+          return;
+        }
+        const data = await res.json();
+        const runs = Array.isArray(data.workflow_runs) ? data.workflow_runs : [];
+        const activeRun = runs.find((r) => r.status !== 'completed');
+        if (activeRun) {
+          runInProgress = true;
+          const startedMs = Date.parse(activeRun.run_started_at || activeRun.created_at || '') || Date.now();
+          if (startedMs > lastRunTimeMs) {
+            lastRunTimeMs = startedMs;
+          }
+          if (!pollTimer) {
+            pollTimer = setInterval(async () => {
+              await checkWorkflowRuns();
+              if (!runInProgress) {
+                clearInterval(pollTimer);
+                pollTimer = null;
+                window.location.reload();
+              }
+            }, 10000);
+          }
+        } else {
+          runInProgress = false;
+        }
+        for (const run of runs) {
+          if (run.conclusion !== 'success') {
+            continue;
+          }
+          const started = Date.parse(run.run_started_at || run.created_at || '') || 0;
+          const updated = Date.parse(run.updated_at || '') || 0;
+          if (updated - started < 20000) {
+            continue;
+          }
+          if (updated > lastRunTimeMs) {
+            lastRunTimeMs = updated;
+            try {
+              localStorage.setItem(lastRunStorageKey, String(lastRunTimeMs));
+            } catch (e) {
+              // Ignore storage errors.
+            }
+          }
+          break;
+        }
+      } catch (e) {
+        // Ignore network errors during background status check.
+      }
+      syncRefreshButton();
+    }
+
+    refreshButton.addEventListener('click', async () => {
+      await checkWorkflowRuns();
+      if (runInProgress || (lastRunTimeMs > 0 && Date.now() - lastRunTimeMs < cooldownMs)) {
+        syncRefreshButton();
+        return;
+      }
+      let token = null;
+      try {
+        token = localStorage.getItem(tokenStorageKey);
+      } catch (e) {
+        // Ignore storage errors.
+      }
+      if (!token) {
+        const input = window.prompt(
+          `Enter a GitHub token with Actions write permission for ${workflowRepo} (saved in localStorage):`
+        );
+        if (!input || !input.trim()) {
+          return;
+        }
+        token = input.trim();
+        try {
+          localStorage.setItem(tokenStorageKey, token);
+        } catch (e) {
+          // Ignore storage errors.
+        }
+      }
+      refreshButton.disabled = true;
+      refreshButton.textContent = '↻ Starting…';
+      if (refreshStatus) {
+        refreshStatus.textContent = '';
+      }
+      try {
+        const res = await fetch(dispatchApiUrl, {
+          method: 'POST',
+          headers: {
+            'Accept': 'application/vnd.github+json',
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ ref: 'main' }),
+        });
+        if (res.status === 401 || res.status === 403) {
+          try {
+            localStorage.removeItem(tokenStorageKey);
+          } catch (e) {
+            // Ignore storage errors.
+          }
+          if (refreshStatus) {
+            refreshStatus.textContent = `Token rejected (needs Actions write access on ${workflowRepo}). Click again to enter a new token.`;
+          }
+          syncRefreshButton();
+          return;
+        }
+        if (!res.ok) {
+          if (refreshStatus) {
+            refreshStatus.textContent = `Failed to start workflow (HTTP ${res.status}).`;
+          }
+          syncRefreshButton();
+          return;
+        }
+        lastRunTimeMs = Date.now();
+        try {
+          localStorage.setItem(lastRunStorageKey, String(lastRunTimeMs));
+        } catch (e) {
+          // Ignore storage errors.
+        }
+        runInProgress = true;
+        if (refreshStatus) {
+          refreshStatus.innerHTML = `Workflow triggered — <a href="${actionsHtmlUrl}" target="_blank" rel="noopener">view on GitHub Actions</a>`;
+        }
+        syncRefreshButton();
+        setTimeout(checkWorkflowRuns, 4000);
+      } catch (e) {
+        if (refreshStatus) {
+          refreshStatus.textContent = 'Network error triggering workflow.';
+        }
+        syncRefreshButton();
+      }
+    });
+
+    syncRefreshButton();
+    setInterval(syncRefreshButton, 1000);
+    checkWorkflowRuns();
   }
 
   for (const header of document.querySelectorAll('th[data-sort]')) {
@@ -1178,6 +1617,11 @@ const String _script = r'''
       });
       for (const row of sorted) {
         tbody.appendChild(row);
+      }
+      const sectionEl = table.closest('details[data-section]');
+      if (sectionEl) {
+        sectionEl.dataset.batchOffset = '0';
+        syncSectionButtons(sectionEl);
       }
     });
   }
