@@ -76,16 +76,96 @@ List<String> _requestedReviewers(Map<String, dynamic> pr) => <String>[
     user['login']! as String,
 ];
 
+/// Parses `SUGGESTED_REVIEWERS.md` content into a map from package name to a
+/// formatted summary of suggested reviewers for that package and its
+/// subpackages/platforms.
+Map<String, String> parseSuggestedReviewers(String markdown) {
+  final headerPattern = RegExp(r'^`([^`]+)`:\s*$');
+  final bulletPattern = RegExp(r'^\s*-\s+(.+?)\s*$');
+  final sections = <({String header, List<String> packages, List<String> bullets})>[];
+
+  String? currentHeader;
+  List<String>? currentPackages;
+  var currentBullets = <String>[];
+
+  void flush() {
+    if (currentHeader != null && currentPackages != null && currentBullets.isNotEmpty) {
+      sections.add((
+        header: currentHeader!,
+        packages: currentPackages!,
+        bullets: List<String>.unmodifiable(currentBullets),
+      ));
+    }
+    currentHeader = null;
+    currentPackages = null;
+    currentBullets = <String>[];
+  }
+
+  for (final String line in const LineSplitter().convert(markdown)) {
+    final Match? headerMatch = headerPattern.firstMatch(line);
+    if (headerMatch != null) {
+      flush();
+      final String rawHeader = headerMatch.group(1)!.trim();
+      final List<String> packages = rawHeader
+          .split(RegExp(r'[,/]'))
+          .map((String s) => s.trim())
+          .where((String s) => s.isNotEmpty)
+          .toList();
+      currentHeader = rawHeader;
+      currentPackages = packages;
+      continue;
+    }
+    if (currentHeader != null) {
+      final Match? bulletMatch = bulletPattern.firstMatch(line);
+      if (bulletMatch != null) {
+        currentBullets.add(bulletMatch.group(1)!.replaceAll('**', '').trim());
+      } else if (line.trim().isNotEmpty && !line.startsWith(' ')) {
+        flush();
+      }
+    }
+  }
+  flush();
+
+  final allPackages = <String>{for (final section in sections) ...section.packages};
+
+  final result = <String, String>{};
+  for (final String pkg in allPackages) {
+    final matching = sections
+        .where((section) => section.packages.any((String p) => p == pkg || p.startsWith('${pkg}_')))
+        .toList();
+    if (matching.isEmpty) {
+      continue;
+    }
+    final buffer = StringBuffer();
+    for (var i = 0; i < matching.length; i++) {
+      final section = matching[i];
+      if (i == 0) {
+        buffer.writeln('Suggested reviewers (${section.header}):');
+      } else {
+        buffer.writeln('${section.header}:');
+      }
+      for (final String bullet in section.bullets) {
+        buffer.writeln('• $bullet');
+      }
+    }
+    result[pkg] = buffer.toString().trimRight();
+  }
+  return result;
+}
+
 /// Builds a set of team members' logins, in lowercase, that doesn't depend on
 /// what org membership the caller can see.
 ///
 /// GitHub only allows requesting reviews from collaborators, so everyone with
 /// a pending review request on one of [prs] is included, as is everyone
-/// mentioned in the repository's SUGGESTED_REVIEWERS.md.
+/// mentioned in the repository's SUGGESTED_REVIEWERS.md. If
+/// [suggestedReviewers] is provided, it is populated with package reviewer
+/// descriptions parsed from `SUGGESTED_REVIEWERS.md`.
 Future<Set<String>> fetchRoster(
   GitHubClient client,
   String repo,
   Iterable<Map<String, dynamic>> prs, {
+  Map<String, String>? suggestedReviewers,
   void Function(String message)? onWarning,
 }) async {
   final roster = <String>{
@@ -101,6 +181,9 @@ Future<Set<String>> fetchRoster(
     roster.addAll(
       RegExp(r'@([A-Za-z0-9-]+)').allMatches(text).map((Match m) => m.group(1)!.toLowerCase()),
     );
+    if (suggestedReviewers != null) {
+      suggestedReviewers.addAll(parseSuggestedReviewers(text));
+    }
   } on GitHubException catch (e) {
     // Not every repository has the file.
     if (e.statusCode != 404) {

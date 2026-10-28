@@ -51,6 +51,7 @@ void writeHtmlReport({
   List<IssueAnalysis> issues = const <IssueAnalysis>[],
   String? issuesRepo,
   Map<int, PreviousPlacement>? previous,
+  Map<String, String> suggestedReviewers = const <String, String>{},
   Set<String> hiddenLabels = defaultHiddenLabels,
   bool showHiddenByDefault = false,
   String? note,
@@ -70,6 +71,7 @@ void writeHtmlReport({
       issuesFile: issuesFile,
       generatedAt: generatedAt,
       previous: previous,
+      suggestedReviewers: suggestedReviewers,
       hiddenLabels: hiddenLabels,
       showHiddenByDefault: showHiddenByDefault,
       note: note,
@@ -85,6 +87,7 @@ void writeHtmlReport({
     files: files,
     issuesFile: issuesFile,
     generatedAt: generatedAt,
+    suggestedReviewers: suggestedReviewers,
     note: note,
   ).render();
   issuesFile
@@ -102,6 +105,7 @@ class _PageRenderer {
     required this.issuesFile,
     required this.generatedAt,
     required this.previous,
+    required this.suggestedReviewers,
     required this.hiddenLabels,
     required this.showHiddenByDefault,
     required this.note,
@@ -116,6 +120,7 @@ class _PageRenderer {
   final File issuesFile;
   final DateTime generatedAt;
   final Map<int, PreviousPlacement>? previous;
+  final Map<String, String> suggestedReviewers;
   final Set<String> hiddenLabels;
   final bool showHiddenByDefault;
   final String? note;
@@ -190,14 +195,13 @@ $_css</style>
 <p class="meta">Generated ${_escape(formatAsMinute(generatedAt))} · ${pagePRs.length} open PRs on this page</p>
 <nav class="sections">${sectionLinks.join(' · ')}</nav>
 <div class="controls">
-<input id="filter" type="search" placeholder="Filter by number, title, author, label, reviewer, or next step" autocomplete="off">
 <button id="toggle-followup" type="button" aria-pressed="false"${followUpCount == 0 ? ' disabled' : ''}>Follow-up PRs ($followUpCount)</button>
 ''');
     if (hiddenLabels.isNotEmpty) {
       _out.writeln(
         '<div class="filter-group" role="group" aria-label="Design filter">'
         '<label class="filter-chip"><input id="show-non-design" type="checkbox"${showHiddenByDefault ? '' : ' checked'}>'
-        '<span>Non-design ($nonHiddenCount)</span></label>'
+        '<span>triage-packages ($nonHiddenCount)</span></label>'
         '<label class="filter-chip"><input id="show-design" type="checkbox"${showHiddenByDefault ? ' checked' : ''}>'
         '<span>${_escape(hiddenLabel)} ($hiddenCount)</span></label>'
         '</div>',
@@ -210,7 +214,10 @@ $_css</style>
       )
       ..writeln('<button id="refresh-report" type="button">↻ Refresh report</button>')
       ..writeln('<span id="refresh-status" class="refresh-status" aria-live="polite"></span>')
-      ..writeln('</div>');
+      ..writeln('</div>')
+      ..writeln(
+        '<input id="filter" type="search" placeholder="Filter by number, title, author, label, reviewer, or next step" autocomplete="off">',
+      );
     if (failed > 0) {
       _out.writeln(
         '<p class="banner">⚠️ $failed ${failed == 1 ? 'PR' : 'PRs'} failed to load, so '
@@ -364,7 +371,9 @@ $_css</style>
 
   String _labelChip(String label) {
     final classes = hiddenLabels.contains(label) ? 'label hidden-label' : 'label';
-    return '<span class="$classes">${_escape(label)}</span>';
+    final String? tooltip = _packageReviewerTooltip(label, suggestedReviewers);
+    final titleAttr = tooltip == null ? '' : ' title="${_escape(tooltip)}"';
+    return '<span class="$classes"$titleAttr>${_escape(label)}</span>';
   }
 
   void _writeLegend() {
@@ -391,6 +400,7 @@ class _IssuesPageRenderer {
     required this.files,
     required this.issuesFile,
     required this.generatedAt,
+    required this.suggestedReviewers,
     required this.note,
   });
 
@@ -400,6 +410,7 @@ class _IssuesPageRenderer {
   final Map<ReportPage, File> files;
   final File issuesFile;
   final DateTime generatedAt;
+  final Map<String, String> suggestedReviewers;
   final String? note;
 
   final StringBuffer _out = StringBuffer();
@@ -460,12 +471,12 @@ $_css</style>
 <p class="meta">Generated ${_escape(formatAsMinute(generatedAt))} · ${issues.length} actionable package issues on this page</p>
 <nav class="sections">${sectionLinks.join(' · ')}</nav>
 <div class="controls">
-<input id="filter" type="search" placeholder="Filter by number, title, author, label, assignee, or next step" autocomplete="off">
 <button id="toggle-followup" type="button" aria-pressed="false"${followUpCount == 0 ? ' disabled' : ''}>Follow-up issues ($followUpCount)</button>
 <label class="filter-chip"><input id="hide-waiting-response" type="checkbox" checked><span>Hide waiting-for-response ($waitingResponseCount)</span></label>
 <button id="refresh-report" type="button">↻ Refresh report</button>
 <span id="refresh-status" class="refresh-status" aria-live="polite"></span>
 </div>
+<input id="filter" type="search" placeholder="Filter by number, title, author, label, assignee, or next step" autocomplete="off">
 ''');
     if (failed > 0) {
       _out.writeln(
@@ -591,14 +602,20 @@ $_css</style>
   String _issueLabelChips(IssueInfo issue) {
     final chips = <String>[
       for (final String label in issue.labels)
-        if (isIssueDisplayLabel(label))
-          '<span class="label${label == 'P0'
-              ? ' priority-p0'
-              : label == 'P1'
-              ? ' priority-p1'
-              : ''}">${_escape(label)}</span>',
+        if (isIssueDisplayLabel(label)) _issueLabelChip(label),
     ];
     return chips.isEmpty ? '' : '<div class="labels">${chips.join()}</div>';
+  }
+
+  String _issueLabelChip(String label) {
+    final priorityClass = label == 'P0'
+        ? ' priority-p0'
+        : label == 'P1'
+        ? ' priority-p1'
+        : '';
+    final String? tooltip = _packageReviewerTooltip(label, suggestedReviewers);
+    final titleAttr = tooltip == null ? '' : ' title="${_escape(tooltip)}"';
+    return '<span class="label$priorityClass"$titleAttr>${_escape(label)}</span>';
   }
 
   void _writeLegend() {
@@ -612,6 +629,24 @@ $_css</style>
 </section>
 ''');
   }
+}
+
+String? _packageReviewerTooltip(String label, Map<String, String> suggestedReviewers) {
+  if (!label.startsWith('p: ') || suggestedReviewers.isEmpty) {
+    return null;
+  }
+  final String pkg = label.substring(3).trim();
+  final String? exact = suggestedReviewers[pkg];
+  if (exact != null) {
+    return exact;
+  }
+  String? bestKey;
+  for (final String key in suggestedReviewers.keys) {
+    if (pkg.startsWith('${key}_') && (bestKey == null || key.length > bestKey.length)) {
+      bestKey = key;
+    }
+  }
+  return bestKey == null ? null : suggestedReviewers[bestKey];
 }
 
 typedef _Activity = ({String summary, String details, int days});
@@ -874,13 +909,14 @@ const String _css = r'''
     display: flex;
     flex-wrap: wrap;
     gap: 10px;
-    margin: 14px 0 4px;
+    margin: 12px 0;
     align-items: center;
   }
   #filter {
-    flex: 1;
-    min-width: 260px;
+    display: block;
+    width: 100%;
     max-width: 42em;
+    margin-top: 12px;
     padding: 8px 12px;
     font-size: 0.9rem;
     border: 1px solid var(--chip-border);
@@ -1020,6 +1056,11 @@ const String _css = r'''
     border-radius: 999px;
     padding: 1px 8px;
     white-space: nowrap;
+  }
+  .label[title] {
+    text-decoration: underline dotted var(--muted);
+    text-underline-offset: 2px;
+    cursor: help;
   }
   .label.hidden-label {
     background: var(--hidden-chip-bg);

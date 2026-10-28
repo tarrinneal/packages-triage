@@ -238,6 +238,7 @@ Future<void> _report(
   final bool interactive = stderr.hasTerminal;
   final listingsByRepo = <String, List<Map<String, dynamic>>>{};
   final roster = <String>{};
+  final suggestedReviewers = <String, String>{};
 
   for (final repo in repos) {
     try {
@@ -249,7 +250,15 @@ Future<void> _report(
             : 'Analyzing the ${listing.length} newest open PRs in $repo (--limit).',
       );
       listingsByRepo[repo] = listing;
-      roster.addAll(await fetchRoster(client, repo, listing, onWarning: _warn));
+      roster.addAll(
+        await fetchRoster(
+          client,
+          repo,
+          listing,
+          suggestedReviewers: suggestedReviewers,
+          onWarning: _warn,
+        ),
+      );
     } on GitHubException catch (e) {
       if (!live && repo != repos.first) {
         _warn('Recording does not include $repo ($e); skipping.');
@@ -379,6 +388,7 @@ Future<void> _report(
       communityFile: htmlFile,
       generatedAt: now,
       previous: previous,
+      suggestedReviewers: suggestedReviewers,
       showHiddenByDefault: showHidden,
       note: <String>[
         if (limit != null) 'Partial report: only the $limit newest open PRs were analyzed.',

@@ -5,6 +5,7 @@
 import 'dart:io';
 
 import 'package:pr_inspector/html_output.dart';
+import 'package:pr_inspector/pr_inspector.dart';
 import 'package:pr_inspector/report_state.dart';
 import 'package:pr_inspector/text_output.dart';
 import 'package:pr_inspector/triage.dart';
@@ -146,7 +147,9 @@ void main() {
       expect(html, contains('data-hidden-labels="triage-design"'));
       expect(
         html,
-        contains('<input id="show-non-design" type="checkbox" checked><span>Non-design (1)</span>'),
+        contains(
+          '<input id="show-non-design" type="checkbox" checked><span>triage-packages (1)</span>',
+        ),
       );
       expect(
         html,
@@ -169,7 +172,7 @@ void main() {
     expect(html, contains('data-show-hidden-default="true"'));
     expect(
       html,
-      contains('<input id="show-non-design" type="checkbox"><span>Non-design (1)</span>'),
+      contains('<input id="show-non-design" type="checkbox"><span>triage-packages (1)</span>'),
     );
     expect(
       html,
@@ -532,5 +535,78 @@ void main() {
     expect(community, contains("offset > 0 ? 'Open next 10' : 'Open first 10'"));
     expect(issuesHtml, contains('class="section-btn open-batch"'));
     expect(issuesHtml, contains('class="section-btn open-all"'));
+  });
+
+  test('renders suggested reviewers tooltip on package labels', () {
+    final Map<String, String> suggestedReviewers = parseSuggestedReviewers('''
+`camera`:
+  - **Cross-platform**: @bparrishMines
+  - **Android**: @camsim99
+  - **iOS**: @hellohuanlin, @louisehsu
+
+`go_router / go_router_builder`:
+  - @chunhtai
+''');
+
+    final issue = IssueInfo(
+      number: 55,
+      author: 'reporter',
+      title: 'Camera issue',
+      url: 'https://github.com/flutter/flutter/issues/55',
+      creationDate: _now.subtract(const Duration(days: 10)),
+      updatedDate: _now,
+      authorType: ContributorType.community,
+      labels: const <String>['team-ecosystem', 'p: camera'],
+    )..hasDetails = true;
+    final issueAnalysis = IssueAnalysis(
+      issue: issue,
+      section: IssueSection.untriaged,
+      waitingSince: issue.creationDate,
+      waitingDays: 10,
+      urgency: Urgency.due,
+      nextStep: 'Triage',
+      reasons: const <String>['Untriaged'],
+    );
+
+    writeHtmlReport(
+      repo: 'o/r',
+      prs: <PRAnalysis>[
+        _analysis(1, labels: const <String>['p: camera', 'p: go_router_builder', 'p: unknown']),
+      ],
+      issues: <IssueAnalysis>[issueAnalysis],
+      communityFile: communityFile,
+      generatedAt: _now,
+      suggestedReviewers: suggestedReviewers,
+    );
+
+    final String community = communityFile.readAsStringSync();
+    expect(
+      rowFor(community, 1),
+      contains(
+        '<span class="label" title="Suggested reviewers (camera):&#10;'
+        '• Cross-platform: @bparrishMines&#10;'
+        '• Android: @camsim99&#10;'
+        '• iOS: @hellohuanlin, @louisehsu">p: camera</span>',
+      ),
+    );
+    expect(
+      rowFor(community, 1),
+      contains(
+        '<span class="label" title="Suggested reviewers (go_router / go_router_builder):&#10;'
+        '• @chunhtai">p: go_router_builder</span>',
+      ),
+    );
+    expect(rowFor(community, 1), contains('<span class="label">p: unknown</span>'));
+
+    final String issuesHtml = issuesPageFileFor(communityFile).readAsStringSync();
+    expect(
+      rowFor(issuesHtml, 55),
+      contains(
+        '<span class="label" title="Suggested reviewers (camera):&#10;'
+        '• Cross-platform: @bparrishMines&#10;'
+        '• Android: @camsim99&#10;'
+        '• iOS: @hellohuanlin, @louisehsu">p: camera</span>',
+      ),
+    );
   });
 }
