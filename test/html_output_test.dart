@@ -641,6 +641,42 @@ void main() {
     final String issuesHtml = issuesPageFileFor(communityFile).readAsStringSync();
     expect(issuesHtml, contains('<h2>Untriaged (<span data-count="untriaged">0</span>)</h2>'));
     expect(issuesHtml, isNot(contains('id="fyiEcosystem"')));
+    expect(issuesHtml, isNot(contains('id="otherTeamIssues"')));
+  });
+
+  test('renders Other (team-ecosystem) section at the bottom of the issues page', () {
+    final issue = IssueInfo(
+      number: 77,
+      author: 'reporter',
+      title: 'Routine P2 issue',
+      url: 'https://github.com/flutter/flutter/issues/77',
+      creationDate: _now.subtract(const Duration(days: 20)),
+      updatedDate: _now.subtract(const Duration(days: 5)),
+      authorType: ContributorType.community,
+      labels: const <String>['team-ecosystem', 'triaged-ecosystem', 'P2', 'p: camera'],
+    )..hasDetails = true;
+    final IssueAnalysis analysis = analyzeIssue(issue, now: _now)!;
+    expect(analysis.section, IssueSection.otherTeamIssues);
+
+    writeHtmlReport(
+      repo: 'flutter/packages',
+      prs: <PRAnalysis>[_analysis(1)],
+      issues: <IssueAnalysis>[analysis],
+      issuesRepo: 'flutter/flutter',
+      communityFile: communityFile,
+      generatedAt: _now,
+    );
+
+    final String issuesHtml = issuesPageFileFor(communityFile).readAsStringSync();
+    expect(
+      issuesHtml,
+      contains('<h2>Other (team-ecosystem) (<span data-count="otherTeamIssues">1</span>)</h2>'),
+    );
+    expect(rowFor(issuesHtml, 77), contains('Routine P2 issue'));
+    expect(
+      issuesHtml.indexOf('id="waitingOnAuthor"'),
+      lessThan(issuesHtml.indexOf('id="otherTeamIssues"')),
+    );
   });
 
   test('renders triage companion button, dock, and Document Picture-in-Picture support', () {

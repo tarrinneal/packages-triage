@@ -10,6 +10,7 @@ import 'package:collection/collection.dart';
 import 'config.dart';
 import 'detail_cache.dart';
 import 'github_client.dart';
+import 'triage.dart';
 import 'types.dart';
 import 'utils.dart';
 
@@ -419,17 +420,11 @@ Future<PRInfo> fetchPRDetails(
 String defaultIssuesRepoFor(String repo, {TriageConfig config = const TriageConfig()}) =>
     (config.issuesRepo != null && config.repos.contains(repo)) ? config.issuesRepo! : repo;
 
-/// Fetches open issues in [issuesRepo] that may need triage or a follow-up
-/// from the team.
+/// Fetches open issues in [issuesRepo] that belong on the issues page.
 ///
 /// When [teamLabel] is set (or defaults to [TriageConfig.issueTeamLabel] for
-/// [TriageConfig.issuesRepo]), queries GitHub's issue search API for:
-/// - untriaged [teamLabel] issues (`-label:<triagedLabel>`),
-/// - untriaged [fyiLabel] issues (`-label:<triagedLabel>`),
-/// - open high-priority [teamLabel] issues,
-/// - open [teamLabel] issues labeled `waiting for response`, and
-/// - recently updated [teamLabel] issues (to catch contributor follow-ups
-///   after a team member's comment).
+/// [TriageConfig.issuesRepo]), fetches all open [teamLabel] issues (paginated)
+/// plus any untriaged [fyiLabel] issues (`-label:<triagedLabel>`).
 ///
 /// For other repositories when [teamLabel] is not set, queries open issues in
 /// [issuesRepo] directly.
@@ -449,22 +444,45 @@ Future<List<Map<String, dynamic>>> fetchTriageIssues(
   final String? effectiveFyiLabel =
       fyiLabel ?? (isConfiguredIssuesRepo ? config.issueFyiLabel : null);
   final String effectiveTriagedLabel = triagedLabel ?? config.issueTriagedLabel;
-  final String highPriorities = config.highPriorityLabels.join(',');
-  final String waitingLabel = config.waitingForResponseLabels.firstOrNull ?? 'waiting for response';
-  final String recentCutoff = formatAsDay(now.subtract(const Duration(days: 60)));
-  final queries = effectiveTeamLabel != null && effectiveTeamLabel.isNotEmpty
-      ? <String>[
-          'repo:$issuesRepo is:issue is:open label:$effectiveTeamLabel -label:$effectiveTriagedLabel',
-          if (effectiveFyiLabel != null && effectiveFyiLabel.isNotEmpty)
-            'repo:$issuesRepo is:issue is:open label:$effectiveFyiLabel -label:$effectiveTriagedLabel',
-          if (highPriorities.isNotEmpty)
-            'repo:$issuesRepo is:issue is:open label:$effectiveTeamLabel label:$highPriorities',
-          'repo:$issuesRepo is:issue is:open label:$effectiveTeamLabel label:"$waitingLabel"',
-          'repo:$issuesRepo is:issue is:open label:$effectiveTeamLabel updated:>=$recentCutoff',
-        ]
-      : <String>['repo:$issuesRepo is:issue is:open'];
   final byNumber = <int, Map<String, dynamic>>{};
-  for (final query in queries) {
+
+  if (effectiveTeamLabel != null && effectiveTeamLabel.isNotEmpty) {
+    for (var page = 1; ; page++) {
+      final GitHubResponse response = await client.get(
+        _apiUrl('/repos/$issuesRepo/issues', <String, String>{
+          'state': 'open',
+          'labels': effectiveTeamLabel,
+          'sort': 'updated',
+          'direction': 'desc',
+          'per_page': '100',
+          'page': '$page',
+        }),
+      );
+      final List<Map<String, dynamic>> batch = _jsonList(response);
+      for (final item in batch) {
+        if (item.containsKey('pull_request')) {
+          continue;
+        }
+        final number = item['number']! as int;
+        byNumber[number] = item;
+        if (limit != null && byNumber.length >= limit) {
+          return byNumber.values.take(limit).toList();
+        }
+      }
+      if (batch.isEmpty || !response.hasNextPage) {
+        break;
+      }
+    }
+  }
+
+  final searchQueries = <String>[
+    if (effectiveTeamLabel != null && effectiveTeamLabel.isNotEmpty) ...<String>[
+      if (effectiveFyiLabel != null && effectiveFyiLabel.isNotEmpty)
+        'repo:$issuesRepo is:issue is:open label:$effectiveFyiLabel -label:$effectiveTriagedLabel',
+    ] else
+      'repo:$issuesRepo is:issue is:open',
+  ];
+  for (final query in searchQueries) {
     final GitHubResponse response = await client.get(
       _apiUrl('/search/issues', <String, String>{
         'q': query,
@@ -539,6 +557,9 @@ Future<List<IssueInfo>> fetchAllIssueDetails(
   Set<String> roster, {
   int concurrency = 8,
   DetailCache? cache,
+  DateTime? now,
+  String? teamLabel,
+  String? triagedLabel,
   void Function(int done, int total, IssueInfo issue)? onProgress,
   TriageConfig config = const TriageConfig(),
 }) async {
@@ -554,6 +575,9 @@ Future<List<IssueInfo>> fetchAllIssueDetails(
         issues[index],
         roster,
         cache: cache,
+        now: now,
+        teamLabel: teamLabel,
+        triagedLabel: triagedLabel,
         config: config,
       );
       results[index] = issue;
@@ -574,6 +598,9 @@ Future<IssueInfo> fetchIssueDetails(
   Map<String, dynamic> listing,
   Set<String> roster, {
   DetailCache? cache,
+  DateTime? now,
+  String? teamLabel,
+  String? triagedLabel,
   TriageConfig config = const TriageConfig(),
 }) async {
   final IssueInfo issue = issueInfoFromListing(listing, roster, config: config);
@@ -584,6 +611,20 @@ Future<IssueInfo> fetchIssueDetails(
   final updatedAt = listing['updated_at']! as String;
   List<_Activity>? comments = _issueCommentsFromJson(cache?.lookup(issue.number, updatedAt));
   if (comments == null) {
+    final String effectiveTeamLabel = teamLabel ?? (config.issueTeamLabel ?? '');
+    final String effectiveTriagedLabel = triagedLabel ?? config.issueTriagedLabel;
+    final bool isAlreadyTriagedTeamIssue =
+        effectiveTeamLabel.isNotEmpty &&
+        issue.labels.contains(effectiveTeamLabel) &&
+        effectiveTriagedLabel.isNotEmpty &&
+        issue.labels.contains(effectiveTriagedLabel) &&
+        issuePriority(issue, config: config) != null &&
+        !hasWaitingForResponseLabel(issue.labels, config: config);
+    if (now != null &&
+        isAlreadyTriagedTeamIssue &&
+        issue.updatedDate.isBefore(now.subtract(const Duration(days: 60)))) {
+      return issue;
+    }
     try {
       comments = await _fetchComments(
         client,

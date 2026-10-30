@@ -490,6 +490,9 @@ class _IssuesPageRenderer {
         if ((section != IssueSection.loadError || _inSection(section).isNotEmpty) &&
             (section != IssueSection.fyiEcosystem ||
                 (fyiLabel != null && fyiLabel!.isNotEmpty) ||
+                _inSection(section).isNotEmpty) &&
+            (section != IssueSection.otherTeamIssues ||
+                (teamLabel != null && teamLabel!.isNotEmpty) ||
                 _inSection(section).isNotEmpty))
           section,
     ];
@@ -713,7 +716,7 @@ $_css</style>
 <section class="legend">
 <h2>Legend</h2>
 <ul>
-<li>Actionable package issues from ${_escape(issuesRepo)}$labelDesc. Already-triaged ${lowPriorities}issues that are not waiting on a response are omitted.</li>
+<li>Package issues from ${_escape(issuesRepo)}$labelDesc. Already-triaged ${lowPriorities}issues that are not waiting on a response are listed in the <strong>${_escape(_sectionTitle(IssueSection.otherTeamIssues))}</strong> section at the bottom.</li>
 <li>Click any row or <strong>🪟 Triage companion</strong> to open an always-on-top floating window with that issue's expanded waiting reasons, suggested reviewers, and queue navigation while viewing GitHub.</li>
 <li><span class="badge follow-up">FOLLOW-UP</span> issue author replied after a team member's comment.</li>
 </ul>

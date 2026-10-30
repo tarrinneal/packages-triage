@@ -97,12 +97,13 @@ and can be filtered using the **Follow-up PRs** / **Follow-up issues** toggle bu
 Their waiting time is measured from the contributor's *first* follow-up reply after the team's last
 comment, so subsequent "friendly ping" comments by the contributor do not reset their wait time.
 
-The **Issues** page groups actionable `flutter/flutter` ecosystem issues into:
+The **Issues** page groups `flutter/flutter` ecosystem issues into:
 - **Untriaged (`team-ecosystem`)**: Open `team-ecosystem` issues missing `triaged-ecosystem` or a `P0`–`P3` priority label.
 - **FYI Ecosystem (`fyi-ecosystem`)**: Open `fyi-ecosystem` issues missing `triaged-ecosystem`.
 - **Waiting on team (author followed up)**: Open ecosystem issues where a team member commented and the issue reporter replied afterwards.
 - **High priority (`P0` / `P1`)**: Open triaged `P0` and `P1` ecosystem issues.
 - **Waiting on author (`waiting for response`)**: Open issues labeled `waiting for response` where the author has not replied since the team's last comment.
+- **Other (`team-ecosystem`)**: All other open `team-ecosystem` issues (such as already-triaged `P2` and `P3` issues).
 
 Within a section, items that have waited longest come first. Waiting times are colored by urgency:
 due at 7 days, overdue at 14, and critical at 30. Community PRs that have waited 30 days on their
@@ -146,9 +147,21 @@ merged), its data is removed. Who counts as the team is still decided fresh on e
 
 Run `dart run bin/pr_inspector.dart --help` for everything else.
 
-## Development
+## Development & Deploying
 
 ```sh
 dart test
 dart analyze
 ```
+
+To format, analyze, test, commit changes in `script/triage`, push to `origin`, and deploy the
+`script/triage` directory to the standalone GitHub Pages repository (`workflow_repo` in
+`triage.yaml`, defaulting to `tarrinneal/packages-triage`):
+
+```sh
+./script/triage/deploy.sh "Your commit message"
+```
+
+Pass `--skip-checks` to skip formatting/tests, `--repo <owner/repo>` to override the target
+repository, or `--dry-run` to preview what would be pushed.
+

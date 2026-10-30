@@ -449,7 +449,7 @@ void main() {
       expect(analysis.nextStep, 'Remove "waiting for response" and ping @teammate');
     });
 
-    test('flags P0 and P1 issues and ignores routine triaged P2/P3 issues', () {
+    test('flags P0 and P1 issues and places routine triaged P2/P3 issues in otherTeamIssues', () {
       final IssueAnalysis? p1 = analyzeIssue(
         makeIssue(labels: <String>['team-ecosystem', 'triaged-ecosystem', 'P1']),
         now: _now,
@@ -462,7 +462,10 @@ void main() {
         makeIssue(labels: <String>['team-ecosystem', 'triaged-ecosystem', 'P2']),
         now: _now,
       );
-      expect(p2, isNull);
+      expect(p2, isNotNull);
+      expect(p2!.section, IssueSection.otherTeamIssues);
+      expect(p2.nextStep, isEmpty);
+      expect(issueSectionTitle(IssueSection.otherTeamIssues), 'Other (team-ecosystem)');
     });
 
     test('triages generic repository issues without ecosystem labels', () {

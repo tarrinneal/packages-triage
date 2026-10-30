@@ -534,6 +534,9 @@ Future<void> _report(
         issueListings,
         roster,
         cache: issuesCache,
+        now: now,
+        teamLabel: effectiveTeamLabel,
+        triagedLabel: effectiveTriagedLabel,
         config: config,
         onProgress: (int done, int total, IssueInfo issue) {
           if (interactive) {

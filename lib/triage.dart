@@ -442,6 +442,10 @@ String issueSectionTitle(
     IssueSection.waitingOnTeam => 'Waiting on team (author followed up)',
     IssueSection.highPriority => highPriorityLabel,
     IssueSection.waitingOnAuthor => 'Waiting on author ($waitingLabel)',
+    IssueSection.otherTeamIssues =>
+      effectiveTeamLabel != null && effectiveTeamLabel.isNotEmpty
+          ? 'Other ($effectiveTeamLabel)'
+          : 'Other',
   };
 }
 
@@ -452,7 +456,7 @@ String issueWaitingLabel(IssueAnalysis analysis) {
     IssueSection.loadError => 'unknown',
     IssueSection.untriaged || IssueSection.fyiEcosystem => '${days}d untriaged',
     IssueSection.waitingOnTeam => '${days}d on team',
-    IssueSection.highPriority => '${days}d since update',
+    IssueSection.highPriority || IssueSection.otherTeamIssues => '${days}d since update',
     IssueSection.waitingOnAuthor => '${days}d on author',
   };
 }
@@ -479,11 +483,12 @@ int compareIssues(IssueAnalysis a, IssueAnalysis b) {
   return a.issue.number.compareTo(b.issue.number);
 }
 
-/// Decides whether [issue] needs triage attention as of [now], and if so,
+/// Decides whether [issue] belongs on the issues page as of [now], and if so,
 /// which section it belongs in and what the next step is.
 ///
-/// Returns `null` for already-triaged issues that are not high priority, not
-/// waiting on a team follow-up, and not waiting on the author.
+/// All open issues labeled with [teamLabel] (by default `team-ecosystem`) are
+/// included: those not in one of the actionable sections above are placed in
+/// [IssueSection.otherTeamIssues] at the bottom of the page.
 IssueAnalysis? analyzeIssue(
   IssueInfo issue, {
   required DateTime now,
@@ -653,6 +658,20 @@ IssueAnalysis? analyzeIssue(
       (_) => ownerStep,
       reasons: <String>['Labeled $priority'],
       minimumUrgency: isTopPriority ? Urgency.critical : Urgency.due,
+    );
+  }
+
+  if (isTeamLabeled) {
+    return place(
+      IssueSection.otherTeamIssues,
+      issue.updatedDate,
+      'the issue was last updated',
+      (_) => '',
+      reasons: <String>[
+        'Labeled $effectiveTeamLabel'
+            '${isTriaged ? ' and $effectiveTriagedLabel' : ''}'
+            '${priority != null ? ' ($priority)' : ''}',
+      ],
     );
   }
 

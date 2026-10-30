@@ -341,6 +341,9 @@ enum IssueSection {
 
   /// Open `team-ecosystem` issues labeled `waiting for response`.
   waitingOnAuthor,
+
+  /// All other open `team-ecosystem` issues (such as triaged `P2`/`P3` issues).
+  otherTeamIssues,
 }
 
 /// Where an issue belongs on the issues triage page, and why.
