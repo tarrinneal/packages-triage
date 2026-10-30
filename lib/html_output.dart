@@ -61,6 +61,8 @@ void writeHtmlReport({
   String? teamLabel = _unsetReportLabel,
   String? fyiLabel = _unsetReportLabel,
   TriageConfig config = const TriageConfig(),
+  String? activeConfigName,
+  List<({String name, String dirPrefix})> configLinks = const <({String name, String dirPrefix})>[],
   String? note,
 }) {
   final Set<String> effectiveHiddenLabels = hiddenLabels ?? config.hiddenLabels;
@@ -93,6 +95,8 @@ void writeHtmlReport({
       showAllLabels: effectiveShowAllLabels,
       workflowRepo: effectiveWorkflowRepo,
       config: config,
+      activeConfigName: activeConfigName,
+      configLinks: configLinks,
       note: note,
     ).render();
     files[page]!
@@ -112,11 +116,34 @@ void writeHtmlReport({
     teamLabel: effectiveTeamLabel,
     fyiLabel: effectiveFyiLabel,
     config: config,
+    activeConfigName: activeConfigName,
+    configLinks: configLinks,
     note: note,
   ).render();
   issuesFile
     ..createSync(recursive: true)
     ..writeAsStringSync(issuesHtml);
+}
+
+String _renderConfigSwitcher({
+  required String? activeConfigName,
+  required List<({String name, String dirPrefix})> configLinks,
+  required String currentBasename,
+}) {
+  if (configLinks.isEmpty) {
+    return '';
+  }
+  final buffer = StringBuffer()
+    ..write('<label class="config-switcher"><span>Config:</span>')
+    ..write('<select id="config-select" aria-label="Switch triage configuration" ')
+    ..write('onchange="if(this.value)location.href=this.value">');
+  for (final link in configLinks) {
+    final selected = link.name == activeConfigName ? ' selected' : '';
+    final href = '${link.dirPrefix}$currentBasename';
+    buffer.write('<option value="${_escape(href)}"$selected>${_escape(link.name)}</option>');
+  }
+  buffer.write('</select></label>');
+  return buffer.toString();
 }
 
 class _PageRenderer {
@@ -135,6 +162,8 @@ class _PageRenderer {
     required this.showAllLabels,
     required this.workflowRepo,
     required this.config,
+    required this.activeConfigName,
+    required this.configLinks,
     required this.note,
   }) : pagePRs = prs.where((PRAnalysis a) => a.page == page).toList();
 
@@ -153,6 +182,8 @@ class _PageRenderer {
   final bool showAllLabels;
   final String workflowRepo;
   final TriageConfig config;
+  final String? activeConfigName;
+  final List<({String name, String dirPrefix})> configLinks;
   final String? note;
 
   final StringBuffer _out = StringBuffer();
@@ -200,7 +231,7 @@ class _PageRenderer {
 <style>
 $_css</style>
 </head>
-<body data-hidden-labels="${_escape(hiddenLabels.join('|'))}" data-show-hidden-default="$showHiddenByDefault" data-generated-at="${_escape(generatedAt.toUtc().toIso8601String())}" data-workflow-repo="${_escape(workflowRepo)}">
+<body data-hidden-labels="${_escape(hiddenLabels.join('|'))}" data-show-hidden-default="$showHiddenByDefault" data-generated-at="${_escape(generatedAt.toUtc().toIso8601String())}" data-workflow-repo="${_escape(workflowRepo)}" data-config-name="${_escape(activeConfigName ?? '')}">
 ''');
   }
 
@@ -221,10 +252,15 @@ $_css</style>
     final int followUpCount = pagePRs.where((PRAnalysis a) => a.isFollowUp).length;
     final String hiddenLabel = hiddenLabels.join('/');
     final int failed = _inSection(Section.loadError).length;
+    final String switcher = _renderConfigSwitcher(
+      activeConfigName: activeConfigName,
+      configLinks: configLinks,
+      currentBasename: _basename(files[page]!.path),
+    );
     _out.write('''
 <header>
 <h1>${_escape(repo)} · ${pageTitle(page)}</h1>
-<nav class="pages">${pageLinks.join(' · ')}</nav>
+<div class="nav-row"><nav class="pages">${pageLinks.join(' · ')}</nav>$switcher</div>
 <p class="meta">Generated ${_escape(formatAsMinute(generatedAt))} · ${pagePRs.length} open PRs on this page</p>
 <nav class="sections">${sectionLinks.join(' · ')}</nav>
 <div class="controls">
@@ -453,6 +489,8 @@ class _IssuesPageRenderer {
     required this.teamLabel,
     required this.fyiLabel,
     required this.config,
+    required this.activeConfigName,
+    required this.configLinks,
     required this.note,
   });
 
@@ -468,6 +506,8 @@ class _IssuesPageRenderer {
   final String? teamLabel;
   final String? fyiLabel;
   final TriageConfig config;
+  final String? activeConfigName;
+  final List<({String name, String dirPrefix})> configLinks;
   final String? note;
 
   final StringBuffer _out = StringBuffer();
@@ -506,7 +546,7 @@ class _IssuesPageRenderer {
 <style>
 $_css</style>
 </head>
-<body data-hidden-labels="" data-show-hidden-default="true" data-generated-at="${_escape(generatedAt.toUtc().toIso8601String())}" data-workflow-repo="${_escape(workflowRepo)}">
+<body data-hidden-labels="" data-show-hidden-default="true" data-generated-at="${_escape(generatedAt.toUtc().toIso8601String())}" data-workflow-repo="${_escape(workflowRepo)}" data-config-name="${_escape(activeConfigName ?? '')}">
 ''');
     _writeHeader(sections);
     sections.forEach(_writeSection);
@@ -535,10 +575,15 @@ $_css</style>
         .where((IssueAnalysis a) => hasWaitingForResponseLabel(a.issue.labels, config: config))
         .length;
     final int failed = _inSection(IssueSection.loadError).length;
+    final String switcher = _renderConfigSwitcher(
+      activeConfigName: activeConfigName,
+      configLinks: configLinks,
+      currentBasename: _basename(issuesFile.path),
+    );
     _out.write('''
 <header>
 <h1>${_escape(issuesRepo)} · Package Issues</h1>
-<nav class="pages">${pageLinks.join(' · ')}</nav>
+<div class="nav-row"><nav class="pages">${pageLinks.join(' · ')}</nav>$switcher</div>
 <p class="meta">Generated ${_escape(formatAsMinute(generatedAt))} · ${issues.length} actionable package issues on this page</p>
 <nav class="sections">${sectionLinks.join(' · ')}</nav>
 <div class="controls">
@@ -950,6 +995,13 @@ const String _css = r'''
     font-weight: 600;
     letter-spacing: -0.01em;
   }
+  .nav-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    margin: 4px 0 10px;
+  }
   nav.pages {
     display: inline-flex;
     flex-wrap: wrap;
@@ -959,9 +1011,32 @@ const String _css = r'''
     padding: 4px;
     border-radius: 9px;
     border: 1px solid var(--border);
-    margin: 4px 0 10px;
+    margin: 0;
     color: transparent;
     font-size: 0;
+  }
+  .config-switcher {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: var(--muted);
+    background: var(--table-head-bg);
+    padding: 4px 10px;
+    border-radius: 9px;
+    border: 1px solid var(--border);
+  }
+  .config-switcher select {
+    font-family: inherit;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text);
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 8px;
+    cursor: pointer;
   }
   nav.pages a, nav.pages strong {
     font-size: 0.88rem;
@@ -2330,6 +2405,10 @@ const String _script = r'''
         refreshStatus.textContent = '';
       }
       try {
+        const configName = body.dataset.configName || '';
+        const dispatchPayload = configName
+            ? { ref: 'main', inputs: { config: configName } }
+            : { ref: 'main' };
         const res = await fetch(dispatchApiUrl, {
           method: 'POST',
           headers: {
@@ -2337,7 +2416,7 @@ const String _script = r'''
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ ref: 'main' }),
+          body: JSON.stringify(dispatchPayload),
         });
         if (res.status === 401 || res.status === 403) {
           try {

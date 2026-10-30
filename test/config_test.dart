@@ -12,120 +12,125 @@ import 'package:test/test.dart';
 
 void main() {
   group('TriageConfig', () {
-    test('default triage.yaml matches const TriageConfig()', () {
-      final config = TriageConfig.fromFile(File('triage.yaml'));
-      const defaults = TriageConfig();
+    test('configs/ecosystem.dart matches defaultConfig', () {
+      final TriageConfig parsed = parseDartConfigFile(File('configs/ecosystem.dart'));
 
-      expect(config.repos, defaults.repos);
-      expect(config.issuesRepo, defaults.issuesRepo);
-      expect(config.workflowRepo, defaults.workflowRepo);
-      expect(config.rosterFile, defaults.rosterFile);
-      expect(config.botAccounts, defaults.botAccounts);
-      expect(config.requiredApprovals, defaults.requiredApprovals);
-      expect(config.hiddenLabels, defaults.hiddenLabels);
-      expect(config.nonHiddenFilterLabel, defaults.nonHiddenFilterLabel);
-      expect(config.routingLabelPrefixes, defaults.routingLabelPrefixes);
-      expect(config.packageLabelPrefix, defaults.packageLabelPrefix);
-      expect(config.showAllLabels, defaults.showAllLabels);
-      expect(config.waitingForResponseLabels, defaults.waitingForResponseLabels);
-      expect(config.issueTeamLabel, defaults.issueTeamLabel);
-      expect(config.issueFyiLabel, defaults.issueFyiLabel);
-      expect(config.issueTriagedLabel, defaults.issueTriagedLabel);
-      expect(config.priorityLabels, defaults.priorityLabels);
-      expect(config.highPriorityLabels, defaults.highPriorityLabels);
+      expect(parsed.repos, defaultConfig.repos);
+      expect(parsed.flutterTeam, defaultConfig.flutterTeam);
+      expect(parsed.teamMembers, defaultConfig.teamMembers);
+      expect(parsed.teamMembers, hasLength(30));
+      expect(parsed.issuesRepo, defaultConfig.issuesRepo);
+      expect(parsed.workflowRepo, defaultConfig.workflowRepo);
+      expect(parsed.rosterFile, 'flutter/packages:SUGGESTED_REVIEWERS.md');
+      expect(parsed.botAccounts, defaultConfig.botAccounts);
+      expect(parsed.requiredApprovals, defaultConfig.requiredApprovals);
+      expect(parsed.hiddenLabels, defaultConfig.hiddenLabels);
+      expect(parsed.nonHiddenFilterLabel, defaultConfig.nonHiddenFilterLabel);
+      expect(parsed.routingLabelPrefixes, defaultConfig.routingLabelPrefixes);
+      expect(parsed.packageLabelPrefix, defaultConfig.packageLabelPrefix);
+      expect(parsed.showAllLabels, defaultConfig.showAllLabels);
+      expect(parsed.waitingForResponseLabels, defaultConfig.waitingForResponseLabels);
+      expect(parsed.issueTeamLabel, 'team-ecosystem');
+      expect(parsed.issueFyiLabel, 'fyi-ecosystem');
+      expect(parsed.issueTriagedLabel, 'triaged-ecosystem');
+      expect(parsed.priorityLabels, defaultConfig.priorityLabels);
+      expect(parsed.highPriorityLabels, defaultConfig.highPriorityLabels);
     });
 
-    test('empty YAML uses built-in defaults', () {
-      final config = TriageConfig.fromYaml('');
-      const defaults = TriageConfig();
-      expect(config.repos, defaults.repos);
-      expect(config.issuesRepo, defaults.issuesRepo);
-      expect(config.issueTeamLabel, defaults.issueTeamLabel);
-    });
+    test(
+      'flutterTeam auto-derives team-*, fyi-*, and triaged-* labels and defaults rosterFile to null for other teams',
+      () {
+        const iosConfig = TriageConfig(repos: <String>['flutter/flutter'], flutterTeam: 'ios');
 
-    test('parses custom repositories and labels from YAML', () {
-      final config = TriageConfig.fromYaml('''
-repos:
-  - dart-lang/tools
-  - dart-lang/native
-issues_repo: null
-workflow_repo: dart-lang/triage-dashboard
-roster_file: OWNERS.md
-bot_accounts:
-  - dart-Autoroller
-required_approvals: 1
-hidden_labels:
-  - needs-rfc
-non_hidden_filter_label: ""
-routing_label_prefixes:
-  - "pkg:"
-  - "os-"
-package_label_prefix: "pkg:"
-show_all_labels: true
-waiting_for_response_labels:
-  - needs-info
-issue_team_label: area-tools
-issue_fyi_label: fyi-tools
-issue_triaged_label: triaged
-priority_labels:
-  - P1
-  - P2
-high_priority_labels:
-  - P1
+        expect(iosConfig.issueTeamLabel, 'team-ios');
+        expect(iosConfig.issueFyiLabel, 'fyi-ios');
+        expect(iosConfig.issueTriagedLabel, 'triaged-ios');
+        expect(iosConfig.issuesRepo, 'flutter/flutter');
+        expect(iosConfig.rosterFile, isNull);
+      },
+    );
+
+    test(
+      'explicit issue labels override flutterTeam defaults, and null flutterTeam disables team labels',
+      () {
+        const customLabels = TriageConfig(
+          issueTeamLabel: 'area-tools',
+          issueFyiLabel: null,
+          issueTriagedLabel: 'triaged',
+        );
+        expect(customLabels.issueTeamLabel, 'area-tools');
+        expect(customLabels.issueFyiLabel, isNull);
+        expect(customLabels.issueTriagedLabel, 'triaged');
+
+        const genericRepo = TriageConfig(repos: <String>['acme/widgets'], flutterTeam: null);
+        expect(genericRepo.issueTeamLabel, isNull);
+        expect(genericRepo.issueFyiLabel, isNull);
+        expect(genericRepo.issueTriagedLabel, 'triaged');
+      },
+    );
+
+    test('loadConfigsDirectory loads multiple .dart config files with ecosystem first', () {
+      final Directory tempDir = Directory.systemTemp.createTempSync('triage_configs_dir_');
+      try {
+        File('${tempDir.path}/ios.dart').writeAsStringSync('''
+import 'package:pr_inspector/types.dart';
+
+const TriageConfig config = TriageConfig(
+  repos: <String>['flutter/flutter'],
+  flutterTeam: 'ios',
+  hiddenLabels: <String>{},
+);
+''');
+        File('${tempDir.path}/ecosystem.dart').writeAsStringSync('''
+import 'package:pr_inspector/types.dart';
+
+const TriageConfig config = TriageConfig(
+  repos: <String>['flutter/packages', 'flutter/core-packages'],
+  flutterTeam: 'ecosystem',
+  rosterFile: 'flutter/packages:SUGGESTED_REVIEWERS.md',
+);
 ''');
 
-      expect(config.repos, <String>['dart-lang/tools', 'dart-lang/native']);
-      expect(config.issuesRepo, isNull);
-      expect(config.workflowRepo, 'dart-lang/triage-dashboard');
-      expect(config.rosterFile, 'OWNERS.md');
-      expect(config.botAccounts, <String>{'dart-Autoroller'});
-      expect(config.requiredApprovals, 1);
-      expect(config.hiddenLabels, <String>{'needs-rfc'});
-      expect(config.nonHiddenFilterLabel, '');
-      expect(config.routingLabelPrefixes, <String>['pkg:', 'os-']);
-      expect(config.packageLabelPrefix, 'pkg:');
-      expect(config.showAllLabels, isTrue);
-      expect(config.waitingForResponseLabels, <String>{'needs-info'});
-      expect(config.issueTeamLabel, 'area-tools');
-      expect(config.issueFyiLabel, 'fyi-tools');
-      expect(config.issueTriagedLabel, 'triaged');
-      expect(config.priorityLabels, <String>['P1', 'P2']);
-      expect(config.highPriorityLabels, <String>{'P1'});
+        final Map<String, TriageConfig> loaded = loadConfigsDirectory(tempDir);
+        expect(loaded.keys.toList(), <String>['ecosystem', 'ios']);
+        expect(loaded['ecosystem']!.issueTeamLabel, 'team-ecosystem');
+        expect(loaded['ecosystem']!.rosterFile, 'flutter/packages:SUGGESTED_REVIEWERS.md');
+        expect(loaded['ios']!.repos, <String>['flutter/flutter']);
+        expect(loaded['ios']!.issueTeamLabel, 'team-ios');
+        expect(loaded['ios']!.rosterFile, isNull);
+        expect(loaded['ios']!.hiddenLabels, isEmpty);
+      } finally {
+        tempDir.deleteSync(recursive: true);
+      }
     });
 
-    test('rejects unknown keys and invalid values', () {
-      expect(() => TriageConfig.fromYaml('unknown_field: 123'), throwsFormatException);
-      expect(() => TriageConfig.fromYaml('repos: [not-a-repo]'), throwsFormatException);
-      expect(() => TriageConfig.fromYaml('repos: []'), throwsFormatException);
-      expect(() => TriageConfig.fromYaml('required_approvals: 0'), throwsFormatException);
+    test('parseDartConfig rejects invalid parameters or malformed repos', () {
+      expect(
+        () => parseDartConfig('const c = TriageConfig(unknownParam: 1);'),
+        throwsFormatException,
+      );
+      expect(
+        () => parseDartConfig("const c = TriageConfig(repos: <String>['bad']);"),
+        throwsFormatException,
+      );
     });
 
-    test('applies custom config to PR and issue triage and HTML output', () {
-      final config = TriageConfig.fromYaml('''
-repos:
-  - acme/widgets
-issues_repo: acme/issues
-roster_file: REVIEWERS.md
-bot_accounts:
-  - acme-bot
-required_approvals: 1
-hidden_labels:
-  - skip-triage
-non_hidden_filter_label: keep-visible
-routing_label_prefixes:
-  - "mod:"
-package_label_prefix: "mod:"
-waiting_for_response_labels:
-  - awaiting-author
-issue_team_label: team-widgets
-issue_fyi_label: fyi-widgets
-issue_triaged_label: triaged-widgets
-priority_labels:
-  - sev-1
-  - sev-2
-high_priority_labels:
-  - sev-1
-''');
+    test('applies custom config and renders multi-config switcher in HTML output', () {
+      const config = TriageConfig(
+        repos: <String>['acme/widgets'],
+        flutterTeam: 'widgets',
+        issuesRepo: 'acme/issues',
+        rosterFile: 'REVIEWERS.md',
+        botAccounts: <String>{'acme-bot'},
+        requiredApprovals: 1,
+        hiddenLabels: <String>{'skip-triage'},
+        nonHiddenFilterLabel: 'keep-visible',
+        routingLabelPrefixes: <String>['mod:'],
+        packageLabelPrefix: 'mod:',
+        waitingForResponseLabels: <String>{'awaiting-author'},
+        priorityLabels: <String>['sev-1', 'sev-2'],
+        highPriorityLabels: <String>{'sev-1'},
+      );
 
       expect(defaultIssuesRepoFor('acme/widgets', config: config), 'acme/issues');
       expect(isBot('acme-bot', config: config), isTrue);
@@ -175,7 +180,7 @@ high_priority_labels:
 
       final Directory tempDir = Directory.systemTemp.createTempSync('triage_config_test_');
       try {
-        final htmlFile = File('${tempDir.path}/index.html');
+        final htmlFile = File('${tempDir.path}/widgets/index.html');
         writeHtmlReport(
           repo: 'acme/widgets',
           prs: <PRAnalysis>[prAnalysis],
@@ -186,16 +191,78 @@ high_priority_labels:
           suggestedReviewers: const <String, String>{'button': '@bob'},
           hiddenLabels: config.hiddenLabels,
           config: config,
+          activeConfigName: 'widgets',
+          configLinks: const <({String name, String dirPrefix})>[
+            (name: 'ecosystem', dirPrefix: '../ecosystem/'),
+            (name: 'widgets', dirPrefix: ''),
+          ],
         );
         final String communityHtml = htmlFile.readAsStringSync();
         final String issuesHtml = issuesPageFileFor(htmlFile).readAsStringSync();
         expect(communityHtml, contains('title="@bob">mod:button</span>'));
         expect(communityHtml, contains('keep-visible'));
+        expect(communityHtml, contains('<select id="config-select"'));
+        expect(
+          communityHtml,
+          contains('<option value="../ecosystem/index.html">ecosystem</option>'),
+        );
+        expect(communityHtml, contains('<option value="index.html" selected>widgets</option>'));
         expect(issuesHtml, contains('team-widgets'));
         expect(issuesHtml, contains('sev-1'));
+        expect(
+          issuesHtml,
+          contains('<option value="../ecosystem/index_issues.html">ecosystem</option>'),
+        );
+        expect(issuesHtml, contains('<option value="index_issues.html" selected>widgets</option>'));
       } finally {
         tempDir.deleteSync(recursive: true);
       }
+    });
+
+    test(
+      'extractSuggestedReviewerHandles and updateTeamMembersInDartConfig sync reviewers cleanly',
+      () {
+        final List<String> handles = extractSuggestedReviewerHandles('''
+`camera`:
+  - **Cross-platform**: @bparrishMines
+  - **Android**: @camsim99, @BparrishMines
+`rfw`:
+  - @Hixie
+''');
+        expect(handles, <String>['bparrishMines', 'camsim99', 'Hixie']);
+
+        final String updated = updateTeamMembersInDartConfig('''
+const TriageConfig config = TriageConfig(
+  repos: <String>['flutter/packages'],
+  flutterTeam: 'ecosystem',
+  teamMembers: <String>[
+    'olduser',
+  ],
+  rosterFile: 'flutter/packages:SUGGESTED_REVIEWERS.md',
+);
+''', handles);
+
+        final TriageConfig reparsed = parseDartConfig(updated);
+        expect(reparsed.teamMembers, <String>['bparrishMines', 'camsim99', 'Hixie']);
+        expect(reparsed.refreshSchedule, '37 19 * * 2');
+      },
+    );
+
+    test('updateWorkflowSchedulesInYaml syncs cron schedules from multiple configs', () {
+      const yaml = '''
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 0 * * 0'
+  workflow_dispatch:
+''';
+      final String synced = updateWorkflowSchedulesInYaml(yaml, const <String, TriageConfig>{
+        'ecosystem': TriageConfig(),
+        'ios': TriageConfig(flutterTeam: 'ios', refreshSchedule: '0 17 * * 4'),
+      });
+      expect(synced, contains("- cron: '37 19 * * 2' # ecosystem"));
+      expect(synced, contains("- cron: '0 17 * * 4' # ios"));
     });
   });
 }

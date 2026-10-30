@@ -385,3 +385,201 @@ class IssueAnalysis {
   /// afterwards.
   final bool isFollowUp;
 }
+
+/// Default repositories inspected when none are passed on the command line.
+const List<String> defaultRepos = <String>['flutter/packages', 'flutter/core-packages'];
+
+/// Default weekly cron expression (`'37 19 * * 2'`) used to refresh a page's
+/// report in GitHub Actions.
+const String defaultRefreshSchedule = '37 19 * * 2';
+
+/// Default repository where issues are tracked for [defaultRepos].
+const String defaultIssuesRepo = 'flutter/flutter';
+
+/// Default repository used by the in-page "Refresh report" button to trigger
+/// the GitHub Actions workflow when not hosted on `*.github.io`.
+const String defaultWorkflowRepo = 'tarrinneal/packages-triage';
+
+/// Default file in each repository used to discover team members and suggested
+/// package reviewers.
+const String defaultRosterFile = 'SUGGESTED_REVIEWERS.md';
+
+/// Default automated accounts that do not have GitHub user type `Bot` or a
+/// `[bot]` suffix.
+const Set<String> defaultBotAccounts = <String>{'fluttergithubbot', 'engine-flutter-autoroll'};
+
+/// Default number of approvals a community PR needs before it is no longer
+/// flagged as missing a reviewer.
+const int defaultRequiredApprovals = 2;
+
+/// PRs with any of these labels are hidden by default, since another triage
+/// rotation handles them.
+const Set<String> defaultHiddenLabels = <String>{'triage-design'};
+
+/// Default label shown on the filter chip for PRs that do not have any of
+/// [defaultHiddenLabels].
+const String defaultNonHiddenFilterLabel = 'triage-packages';
+
+/// Default label prefixes considered routing/display labels on PRs and issues.
+const List<String> defaultRoutingLabelPrefixes = <String>['p: ', 'platform-', 'triage-'];
+
+/// Default prefix used to match package labels against [defaultRosterFile].
+const String defaultPackageLabelPrefix = 'p: ';
+
+/// Labels indicating that an item is waiting on a response from the author.
+const Set<String> defaultWaitingForResponseLabels = <String>{
+  'waiting for response',
+  'waiting-for-response',
+  'waiting for customer response',
+};
+
+/// Default primary label identifying issues owned by the team.
+const String defaultIssueTeamLabel = 'team-ecosystem';
+
+/// Default secondary label identifying FYI issues for the team.
+const String defaultIssueFyiLabel = 'fyi-ecosystem';
+
+/// Default label indicating that an issue has been triaged by the team.
+const String defaultIssueTriagedLabel = 'triaged-ecosystem';
+
+/// Priority labels used on `flutter/flutter` issues, in descending priority
+/// order.
+const List<String> defaultPriorityLabels = <String>['P0', 'P1', 'P2', 'P3'];
+
+/// Priority labels considered high priority on the issues page.
+const Set<String> defaultHighPriorityLabels = <String>{'P0', 'P1'};
+
+const String _deriveFromTeam = '\x00derive_from_flutter_team';
+
+/// Configuration for repositories, labels, and roster lookup in the triage
+/// tool.
+///
+/// Edit `defaultConfig` in `lib/config.dart` to customize the tool for your
+/// team or repositories.
+class TriageConfig {
+  /// Creates a configuration with the given settings.
+  ///
+  /// Setting [flutterTeam] (for example `'ecosystem'`, `'ios'`, or `'web'`)
+  /// automatically sets [issueTeamLabel] to `'team-<flutterTeam>'`,
+  /// [issueFyiLabel] to `'fyi-<flutterTeam>'`, and [issueTriagedLabel] to
+  /// `'triaged-<flutterTeam>'` unless those fields are explicitly overridden.
+  const TriageConfig({
+    this.repos = defaultRepos,
+    this.flutterTeam = 'ecosystem',
+    this.refreshSchedule = defaultRefreshSchedule,
+    this.teamMembers = const <String>[],
+    this.issuesRepo = defaultIssuesRepo,
+    this.workflowRepo = defaultWorkflowRepo,
+    String? rosterFile = _deriveFromTeam,
+    this.botAccounts = defaultBotAccounts,
+    this.requiredApprovals = defaultRequiredApprovals,
+    this.hiddenLabels = defaultHiddenLabels,
+    this.nonHiddenFilterLabel = defaultNonHiddenFilterLabel,
+    this.routingLabelPrefixes = defaultRoutingLabelPrefixes,
+    this.packageLabelPrefix = defaultPackageLabelPrefix,
+    this.showAllLabels = false,
+    this.waitingForResponseLabels = defaultWaitingForResponseLabels,
+    String? issueTeamLabel = _deriveFromTeam,
+    String? issueFyiLabel = _deriveFromTeam,
+    String? issueTriagedLabel = _deriveFromTeam,
+    this.priorityLabels = defaultPriorityLabels,
+    this.highPriorityLabels = defaultHighPriorityLabels,
+  }) : _rosterFile = rosterFile,
+       _issueTeamLabel = issueTeamLabel,
+       _issueFyiLabel = issueFyiLabel,
+       _issueTriagedLabel = issueTriagedLabel;
+
+  /// Default repositories to inspect for open PRs when none are specified on
+  /// the command line.
+  final List<String> repos;
+
+  /// Short Flutter team name (such as `'ecosystem'`, `'ios'`, or `'android'`)
+  /// used to derive `team-<name>`, `fyi-<name>`, and `triaged-<name>` issue
+  /// labels when not explicitly set, or `null` for non-Flutter repositories.
+  final String? flutterTeam;
+
+  /// Standard 5-field UTC cron expression specifying when this config's page
+  /// and reviewer list should be refreshed automatically in GitHub Actions, or
+  /// `null` to disable scheduled refreshes for this config.
+  final String? refreshSchedule;
+
+  /// GitHub usernames of team members to include in the team roster.
+  final List<String> teamMembers;
+
+  /// Repository where issues are tracked for [repos], or `null` to default to
+  /// the PR repository itself.
+  final String? issuesRepo;
+
+  /// Repository (`owner/repo`) that hosts the `deploy_pages.yml` GitHub
+  /// Actions workflow for the in-page "Refresh report" button.
+  final String workflowRepo;
+
+  final String? _rosterFile;
+
+  /// Markdown file listing team reviewers and package reviewer mappings.
+  ///
+  /// Can be a repository-qualified path (`'owner/repo:path/to/file.md'`), a
+  /// path relative to each inspected PR repository (`'SUGGESTED_REVIEWERS.md'`),
+  /// or `null` to disable fetching a roster file (falling back to `CODEOWNERS`).
+  String? get rosterFile => identical(_rosterFile, _deriveFromTeam)
+      ? (flutterTeam == 'ecosystem' ? defaultRosterFile : null)
+      : (_rosterFile != null && _rosterFile.isEmpty ? null : _rosterFile);
+
+  /// Logins of automated accounts that should be treated as bots even if
+  /// GitHub does not report their `type` as `Bot`.
+  final Set<String> botAccounts;
+
+  /// Number of approvals a community PR needs before it is no longer flagged
+  /// as missing a reviewer.
+  final int requiredApprovals;
+
+  /// PR labels that start out hidden by default on the report.
+  final Set<String> hiddenLabels;
+
+  /// Label displayed on the filter toggle chip for PRs without [hiddenLabels].
+  final String nonHiddenFilterLabel;
+
+  /// Label prefixes displayed as chips on PR and issue rows.
+  final List<String> routingLabelPrefixes;
+
+  /// Label prefix used to look up package reviewer tooltips from [rosterFile].
+  final String packageLabelPrefix;
+
+  /// Whether to display all non-CLA labels as chips on PR and issue rows.
+  final bool showAllLabels;
+
+  /// Labels indicating that a PR or issue is waiting on the author's response.
+  final Set<String> waitingForResponseLabels;
+
+  final String? _issueTeamLabel;
+  final String? _issueFyiLabel;
+  final String? _issueTriagedLabel;
+
+  /// Primary label identifying issues belonging to the team on the issues
+  /// page, or `null` if the repository does not filter issues by a team label.
+  String? get issueTeamLabel => identical(_issueTeamLabel, _deriveFromTeam)
+      ? (flutterTeam != null ? 'team-$flutterTeam' : null)
+      : _issueTeamLabel;
+
+  /// Secondary label identifying FYI issues on the issues page, or `null` if
+  /// the team does not use an FYI label.
+  String? get issueFyiLabel => identical(_issueFyiLabel, _deriveFromTeam)
+      ? (flutterTeam != null ? 'fyi-$flutterTeam' : null)
+      : _issueFyiLabel;
+
+  /// Label indicating that an issue has been triaged by the team.
+  String get issueTriagedLabel => identical(_issueTriagedLabel, _deriveFromTeam)
+      ? (flutterTeam != null ? 'triaged-$flutterTeam' : 'triaged')
+      : (_issueTriagedLabel ?? '');
+
+  /// Priority labels in descending priority order (e.g. `['P0', 'P1', 'P2', 'P3']`).
+  final List<String> priorityLabels;
+
+  /// Priority labels that should be shown in the high-priority issues section
+  /// even after being triaged (e.g. `{'P0', 'P1'}`).
+  final Set<String> highPriorityLabels;
+
+  /// Priority labels that are not in [highPriorityLabels] (e.g. `['P2', 'P3']`).
+  List<String> get lowPriorityLabels =>
+      priorityLabels.where((String p) => !highPriorityLabels.contains(p)).toList();
+}

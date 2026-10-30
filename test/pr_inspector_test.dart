@@ -541,6 +541,39 @@ void main() {
     }
   });
 
+  test(
+    'fetchRoster supports cross-repo rosterFile (owner/repo:path) and null rosterFile',
+    () async {
+      final GitHubClient client = replayClient(<String, Map<String, Object?>>{
+        _url('/repos/flutter/packages/contents/SUGGESTED_REVIEWERS.md'): _ok(<String, Object?>{
+          'content': base64.encode(utf8.encode('`camera`:\n  - @CrossRepoMember\n')),
+        }),
+        _url('/repos/flutter/flutter/contents/.github/CODEOWNERS'): _ok(<String, Object?>{
+          'content': base64.encode(utf8.encode('* @CodeownerMember\n')),
+        }),
+      });
+      try {
+        final Set<String> crossRepoRoster = await fetchRoster(
+          client,
+          'flutter/core-packages',
+          <Map<String, dynamic>>[],
+          config: const TriageConfig(rosterFile: 'flutter/packages:SUGGESTED_REVIEWERS.md'),
+        );
+        expect(crossRepoRoster, <String>{'crossrepomember'});
+
+        final Set<String> noRosterFile = await fetchRoster(
+          client,
+          'flutter/flutter',
+          <Map<String, dynamic>>[],
+          config: const TriageConfig(flutterTeam: 'ios', rosterFile: null),
+        );
+        expect(noRosterFile, <String>{'codeownermember'});
+      } finally {
+        client.close();
+      }
+    },
+  );
+
   test('parseGitHubRepoFromRemoteUrl parses HTTPS and SSH GitHub URLs', () {
     expect(parseGitHubRepoFromRemoteUrl('https://github.com/acme/widgets.git'), 'acme/widgets');
     expect(parseGitHubRepoFromRemoteUrl('https://github.com/acme/widgets/'), 'acme/widgets');

@@ -12,31 +12,29 @@ button, rate-limited to once every 5 minutes) and publishes it to GitHub Pages.
 To enable it on a standalone repository:
 1. Go to **Settings → Pages**.
 2. Under **Build and deployment**, set **Source** to **GitHub Actions**.
-3. *(Optional, for other repositories)* Edit [`triage.yaml`](triage.yaml) (or set `TRIAGE_REPOS` in **Settings → Secrets and variables → Actions → Variables**) to configure repositories and labels.
+3. *(Optional, for additional teams or repositories)* Edit [`configs/ecosystem.dart`](configs/ecosystem.dart) or add new `.dart` files in [`configs/`](configs/).
 
 Once enabled, the report will be published at:
-- `https://<owner>.github.io/<repo>/` (Community PRs)
-- `https://<owner>.github.io/<repo>/index_team.html` (Team PRs)
-- `https://<owner>.github.io/<repo>/index_issues.html` (Actionable Issues)
+- `https://<owner>.github.io/<repo>/` (Primary config's Community PRs, Team PRs, and Issues)
+- `https://<owner>.github.io/<repo>/<config_name>/` (Each `configs/<config_name>.dart`'s Community PRs, `index_team.html`, and `index_issues.html`, with a **Config** dropdown in the header to switch between them)
 
-## Configuration (`triage.yaml`)
+## Configuration (`configs/*.dart`)
 
-By default, the tool reads [`triage.yaml`](triage.yaml) next to `pubspec.yaml` (or a custom file
-passed with `--config <file>` / `-c <file>`). Every field is optional and defaults to the Flutter
-Ecosystem triage settings when omitted:
+Each `.dart` file in [`configs/`](configs/) defines a `const TriageConfig` for one hosted team dashboard (for example, [`configs/ecosystem.dart`](configs/ecosystem.dart)):
 
-- `repos`: PR repositories to inspect (`flutter/packages` and `flutter/core-packages` by default).
-- `issues_repo`: Repository where issues are tracked (`flutter/flutter` by default; set to `null` or `""` to use the first PR repository).
-- `workflow_repo`: Repository hosting the GitHub Actions refresh workflow (`tarrinneal/packages-triage` by default).
-- `roster_file`: Markdown file in the PR repository listing team reviewers (`SUGGESTED_REVIEWERS.md` by default; falls back to `CODEOWNERS`).
-- `bot_accounts`: Logins treated as bots in addition to `[bot]` accounts.
-- `required_approvals`: Number of approvals a community PR needs before it is no longer missing a reviewer (`2` by default).
-- `hidden_labels`: PR labels hidden by default unless `--show-hidden` or the UI toggle is used (`triage-design` by default).
-- `non_hidden_filter_label`: Label that keeps a PR visible even when it also has a hidden label (`triage-packages` by default).
-- `routing_label_prefixes` / `package_label_prefix` / `show_all_labels`: Label prefixes shown as badges on PR and issue rows (`p: `, `platform-`, `triage-` by default).
-- `waiting_for_response_labels`: Labels indicating an issue is waiting on the author (`waiting for response`, `waiting for customer response`).
-- `issue_team_label`, `issue_fyi_label`, `issue_triaged_label`: Issue triage labels (`team-ecosystem`, `fyi-ecosystem`, `triaged-ecosystem` by default).
-- `priority_labels` / `high_priority_labels`: Issue priority labels (`P0`–`P3` and `P0`–`P1` by default).
+```dart
+const TriageConfig config = TriageConfig(
+  repos: <String>['flutter/packages', 'flutter/core-packages'],
+  flutterTeam: 'ecosystem',
+  rosterFile: 'flutter/packages:SUGGESTED_REVIEWERS.md',
+  hiddenLabels: <String>{'triage-design'},
+  nonHiddenFilterLabel: 'triage-packages',
+);
+```
+
+- **Adding another hosted page**: Create a new file `configs/<team>.dart` (e.g., `configs/ios.dart`) and set `repos` and `flutterTeam`. Dropping the file into `configs/` automatically generates `/<team>/index.html`, `/<team>/index_team.html`, and `/<team>/index_issues.html` and adds `<team>` to the header **Config** switcher dropdown across all pages.
+- **Cross-repo or disabled `rosterFile`**: Set `rosterFile` to `'owner/repo:path/to/file.md'` to load reviewer mappings from another repository, a repo-relative path (`'SUGGESTED_REVIEWERS.md'`), or `null` (the default for non-`ecosystem` teams) to disable it and fall back to `CODEOWNERS`.
+- **Single-config local run**: Pass `--config configs/<team>.dart` (`-c`) to run a single config locally.
 
 ## Running it locally
 
@@ -47,13 +45,12 @@ The tool looks for a GitHub token in this order:
 
 A fine-grained token with read-only access to public repositories is enough.
 
-Then run the tool with an output file. By default it inspects the repositories in `triage.yaml`
-(`flutter/packages` and `flutter/core-packages`); pass `--config <file>` or one or more
-`owner/repo` arguments to inspect any GitHub repository:
+Then run the tool with an output file. By default it inspects the repositories in `lib/config.dart`
+(`flutter/packages` and `flutter/core-packages`); pass one or more `owner/repo` arguments to inspect
+any GitHub repository:
 
 ```sh
 dart run bin/pr_inspector.dart --html /tmp/triage.html --open
-dart run bin/pr_inspector.dart --config my_triage.yaml --html /tmp/triage.html --open
 dart run bin/pr_inspector.dart owner/repo --html /tmp/triage.html --open
 ```
 
@@ -64,11 +61,11 @@ dart pub global activate -s git https://github.com/<owner>/<repo>.git
 pr_inspector owner/repo --html /tmp/triage.html --open
 ```
 
-When inspecting non-`flutter/*` repositories without a custom config file, the tool automatically:
-- Requires 1 approval instead of 2 for community PRs (override with `--required-approvals <n>`).
+When inspecting non-`flutter/*` repositories on the command line, the tool automatically:
+- Requires 1 approval instead of 2 for community PRs.
 - Displays all PR and issue labels on rows (instead of only Flutter routing labels).
 - Falls back to `.github/CODEOWNERS` / `CODEOWNERS` when `SUGGESTED_REVIEWERS.md` is not present.
-- Triages open issues generically when `--team-label` is not set.
+- Triages open issues generically without requiring team labels.
 
 This writes three linked pages:
 
@@ -155,8 +152,8 @@ dart analyze
 ```
 
 To format, analyze, test, commit changes in `script/triage`, push to `origin`, and deploy the
-`script/triage` directory to the standalone GitHub Pages repository (`workflow_repo` in
-`triage.yaml`, defaulting to `tarrinneal/packages-triage`):
+`script/triage` directory to the standalone GitHub Pages repository (`workflowRepo` in
+`lib/config.dart`, defaulting to `tarrinneal/packages-triage`):
 
 ```sh
 ./script/triage/deploy.sh "Your commit message"

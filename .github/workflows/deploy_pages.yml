@@ -4,14 +4,17 @@ on:
   push:
     branches: [main]
   schedule:
-    # Every Tuesday at 12:37 PM Pacific (19:37 UTC during PDT, 20:37 UTC during PST),
-    # scheduled off-peak so the report is ready before 1:00 PM Pacific.
-    - cron: '37 19 * * 2'
-    - cron: '37 20 * * 2'
+    # Synced from configs/*.dart (edit refreshSchedule in configs/<name>.dart):
+    - cron: '37 19 * * 2' # ecosystem
   workflow_dispatch:
+    inputs:
+      config:
+        description: 'Config name to refresh (leave empty to refresh all configs)'
+        required: false
+        type: string
 
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
@@ -26,22 +29,11 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
-      - name: Check Pacific Daylight/Standard Time and 5-minute cooldown
+      - name: Check 5-minute cooldown for manual dispatch
         id: tz_check
         run: |
-          if [ "${{ github.event_name }}" = "schedule" ]; then
-            tz_abbr=$(TZ=America/Los_Angeles date +%Z)
-            if [ "${{ github.event.schedule }}" = "37 19 * * 2" ] && [ "$tz_abbr" = "PDT" ]; then
-              :
-            elif [ "${{ github.event.schedule }}" = "37 20 * * 2" ] && [ "$tz_abbr" = "PST" ]; then
-              :
-            else
-              echo "Skipping ${{ github.event.schedule }} because America/Los_Angeles is currently in $tz_abbr."
-              echo "should_run=false" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-          fi
-          if ! python3 - "${{ github.repository }}" "${{ github.run_id }}" <<'PY'
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            if ! python3 - "${{ github.repository }}" "${{ github.run_id }}" <<'PY'
           import datetime, json, sys, urllib.request
           repo, current_run_id = sys.argv[1], int(sys.argv[2])
           url = f"https://api.github.com/repos/{repo}/actions/workflows/deploy_pages.yml/runs?per_page=10"
@@ -58,7 +50,6 @@ jobs:
                   continue
               started = datetime.datetime.fromisoformat(run["run_started_at"].replace("Z", "+00:00"))
               updated = datetime.datetime.fromisoformat(run["updated_at"].replace("Z", "+00:00"))
-              # Ignore runs that were skipped by tz_check (which finish in < 20s without deploying).
               if (updated - started).total_seconds() < 20:
                   continue
               elapsed = (now - updated).total_seconds()
@@ -67,9 +58,10 @@ jobs:
                   sys.exit(1)
               break
           PY
-          then
-            echo "should_run=false" >> "$GITHUB_OUTPUT"
-            exit 0
+            then
+              echo "should_run=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
           fi
           echo "should_run=true" >> "$GITHUB_OUTPUT"
 
@@ -92,44 +84,69 @@ jobs:
         id: pages
         uses: actions/configure-pages@v5
 
-      - name: Restore PR detail cache and previous report state
+      - name: Restore PR detail cache and existing site pages
         if: steps.tz_check.outputs.should_run == 'true'
         uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cache/pr_inspector
-            site/index.state.json
+            site
           key: triage-state-${{ github.run_id }}
           restore-keys: |
             triage-state-
 
-      - name: Fetch previous report state from live Pages site if cache expired
+      - name: Fetch existing pages and report state from live Pages site if missing from cache
         if: steps.tz_check.outputs.should_run == 'true'
         run: |
           mkdir -p site
-          if [ ! -f site/index.state.json ]; then
-            curl -fsSL "${{ steps.pages.outputs.base_url }}/index.state.json" -o site/index.state.json || true
-          fi
+          for page in index.html index_team.html index_issues.html index.state.json; do
+            if [ ! -f "site/$page" ]; then
+              curl -fsSL "${{ steps.pages.outputs.base_url }}/$page" -o "site/$page" || true
+            fi
+          done
+          for cfg in configs/*.dart; do
+            [ -f "$cfg" ] || continue
+            name="$(basename "$cfg" .dart)"
+            mkdir -p "site/$name"
+            for page in index.html index_team.html index_issues.html index.state.json; do
+              if [ ! -f "site/$name/$page" ]; then
+                curl -fsSL "${{ steps.pages.outputs.base_url }}/$name/$page" -o "site/$name/$page" || true
+              fi
+            done
+          done
 
-      - name: Generate HTML triage report
+      - name: Sync teamMembers and generate HTML triage report
         if: steps.tz_check.outputs.should_run == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TRIAGE_REPOS: ${{ vars.TRIAGE_REPOS }}
-          TRIAGE_TEAM_LABEL: ${{ vars.TRIAGE_TEAM_LABEL }}
-          TRIAGE_FYI_LABEL: ${{ vars.TRIAGE_FYI_LABEL }}
-          TRIAGE_TRIAGED_LABEL: ${{ vars.TRIAGE_TRIAGED_LABEL }}
-          TRIAGE_REQUIRED_APPROVALS: ${{ vars.TRIAGE_REQUIRED_APPROVALS }}
           TZ: America/Los_Angeles
-        run: dart run bin/pr_inspector.dart --html site/index.html
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SCHEDULE: ${{ github.event.schedule }}
+          INPUT_CONFIG: ${{ inputs.config }}
+        run: |
+          TARGET_ARGS=()
+          if [ "$EVENT_NAME" = "schedule" ] && [ -n "$EVENT_SCHEDULE" ]; then
+            TARGET_ARGS=(--only-schedule "$EVENT_SCHEDULE")
+          elif [ -n "$INPUT_CONFIG" ]; then
+            TARGET_ARGS=(--only "$INPUT_CONFIG")
+          fi
+          dart run bin/sync_reviewers.dart "${TARGET_ARGS[@]}"
+          if [[ -n "$(git status --porcelain -- configs/ lib/config.dart .github/workflows/deploy_pages.yml)" ]]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add configs/ lib/config.dart .github/workflows/deploy_pages.yml
+            git commit -m "Sync teamMembers from SUGGESTED_REVIEWERS.md [skip ci]"
+            git push origin HEAD:main || true
+          fi
+          dart run bin/pr_inspector.dart --html site/index.html "${TARGET_ARGS[@]}"
 
-      - name: Save PR detail cache and report state
+      - name: Save PR detail cache and site pages
         if: always() && steps.tz_check.outputs.should_run == 'true'
         uses: actions/cache/save@v4
         with:
           path: |
             ~/.cache/pr_inspector
-            site/index.state.json
+            site
           key: triage-state-${{ github.run_id }}
 
       - name: Upload Pages artifact

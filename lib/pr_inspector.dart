@@ -7,7 +7,6 @@ import 'dart:io';
 
 import 'package:collection/collection.dart';
 
-import 'config.dart';
 import 'detail_cache.dart';
 import 'github_client.dart';
 import 'triage.dart';
@@ -226,15 +225,20 @@ Future<Set<String>> fetchRoster(
   TriageConfig config = const TriageConfig(),
 }) async {
   final roster = <String>{
+    for (final String member in config.teamMembers)
+      member.replaceFirst(RegExp(r'^@'), '').toLowerCase(),
     for (final Map<String, dynamic> pr in prs)
       for (final String login in _requestedReviewers(pr)) login.toLowerCase(),
   };
   var foundSuggestedReviewers = false;
-  final String rosterFile = config.rosterFile;
-  if (rosterFile.isNotEmpty) {
+  final String? rosterFile = config.rosterFile;
+  if (rosterFile != null && rosterFile.isNotEmpty) {
+    final int colonIndex = rosterFile.indexOf(':');
+    final String targetRepo = colonIndex > 0 ? rosterFile.substring(0, colonIndex) : repo;
+    final String targetPath = colonIndex > 0 ? rosterFile.substring(colonIndex + 1) : rosterFile;
     try {
       final GitHubResponse response = await client.get(
-        _apiUrl('/repos/$repo/contents/$rosterFile'),
+        _apiUrl('/repos/$targetRepo/contents/$targetPath'),
       );
       final content = (response.json! as Map<String, dynamic>)['content']! as String;
       final String text = utf8.decode(base64.decode(content.replaceAll(RegExp(r'\s'), '')));

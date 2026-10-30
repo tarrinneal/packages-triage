@@ -2,16 +2,24 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import 'config.dart';
 import 'types.dart';
 import 'utils.dart';
 
 export 'config.dart'
     show
+        configsDirectoryFor,
+        defaultConfig,
+        defaultConfigsDirName,
+        extractSuggestedReviewerHandles,
+        loadConfigsDirectory,
+        parseDartConfig,
+        parseDartConfigFile,
+        updateTeamMembersInDartConfig,
+        updateWorkflowSchedulesInYaml;
+export 'types.dart'
+    show
         TriageConfig,
-        configFileFor,
         defaultBotAccounts,
-        defaultConfigFileName,
         defaultHiddenLabels,
         defaultHighPriorityLabels,
         defaultIssueFyiLabel,
@@ -21,6 +29,7 @@ export 'config.dart'
         defaultNonHiddenFilterLabel,
         defaultPackageLabelPrefix,
         defaultPriorityLabels,
+        defaultRefreshSchedule,
         defaultRepos,
         defaultRequiredApprovals,
         defaultRosterFile,
@@ -149,8 +158,9 @@ PRAnalysis analyzePR(
       ? ReportPage.team
       : ReportPage.community;
   final isCommunityPR = pr.authorType == ContributorType.community;
-  final rosterSource = config.rosterFile.isNotEmpty
-      ? 'in ${config.rosterFile}, CODEOWNERS, or requested as a reviewer'
+  final String? rosterFile = config.rosterFile;
+  final rosterSource = rosterFile != null && rosterFile.isNotEmpty
+      ? 'in $rosterFile, CODEOWNERS, or requested as a reviewer'
       : 'in CODEOWNERS or requested as a reviewer';
   final reasons = <String>[
     if (pr.authorTypeFromRoster) '@${pr.author} counts as team: $rosterSource',
@@ -668,9 +678,7 @@ IssueAnalysis? analyzeIssue(
       'the issue was last updated',
       (_) => '',
       reasons: <String>[
-        'Labeled $effectiveTeamLabel'
-            '${isTriaged ? ' and $effectiveTriagedLabel' : ''}'
-            '${priority != null ? ' ($priority)' : ''}',
+        'Labeled $effectiveTeamLabel${isTriaged ? ' and $effectiveTriagedLabel' : ''}${priority != null ? ' ($priority)' : ''}',
       ],
     );
   }

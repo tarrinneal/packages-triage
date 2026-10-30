@@ -16,8 +16,6 @@ import 'package:pr_inspector/triage.dart';
 import 'package:pr_inspector/types.dart';
 import 'package:pr_inspector/utils.dart';
 
-const List<String> _defaultRepos = defaultRepos;
-
 /// Thrown for invalid command-line usage.
 class _UsageException implements Exception {
   _UsageException(this.message);
@@ -26,18 +24,34 @@ class _UsageException implements Exception {
 }
 
 Future<void> main(List<String> arguments) async {
+  const TriageConfig config = defaultConfig;
   final parser = ArgParser()
     ..addOption(
       'config',
       abbr: 'c',
-      help: 'Read repository and label settings from <file> (defaults to triage.yaml if present).',
+      help:
+          'Run a single Dart config file (e.g. configs/ecosystem.dart) instead of '
+          'all configs in configs/.',
+    )
+    ..addOption(
+      'only',
+      help:
+          'When building multi-config HTML from configs/, only refresh the named '
+          'config (e.g. ecosystem) while preserving switcher links to all configs.',
+    )
+    ..addOption(
+      'only-schedule',
+      help:
+          'When building multi-config HTML from configs/, only refresh configs '
+          'whose refreshSchedule matches this cron expression.',
     )
     ..addOption('pr', abbr: 'p', help: 'Explain how a single PR is triaged, and why.')
     ..addOption(
       'html',
       help:
           'Write the report as HTML: community PRs to <file>, team PRs to '
-          '<file name>_team.html, and package issues to <file name>_issues.html.',
+          '<file name>_team.html, and package issues to <file name>_issues.html. '
+          'When running multiple configs from configs/, also writes <dir>/<name>/*.html.',
     )
     ..addFlag('open', negatable: false, help: 'Open the HTML report when it is done.')
     ..addFlag(
@@ -45,42 +59,11 @@ Future<void> main(List<String> arguments) async {
       defaultsTo: true,
       help: 'Also fetch and triage issues (from flutter/flutter for flutter/packages).',
     )
-    ..addOption(
-      'required-approvals',
-      help:
-          'Number of approvals a community PR needs before it is no longer '
-          'missing a reviewer (defaults to 2 for flutter/* repos, 1 otherwise).',
-    )
-    ..addFlag(
-      'all-labels',
-      negatable: false,
-      help:
-          'Show all PR and issue labels on report rows (automatic for non-flutter/* '
-          'repositories).',
-    )
-    ..addOption(
-      'team-label',
-      help: 'Issue label for the team rotation (defaults to team-ecosystem on flutter/flutter).',
-    )
-    ..addOption(
-      'fyi-label',
-      help: 'Secondary FYI issue label (defaults to fyi-ecosystem on flutter/flutter).',
-    )
-    ..addOption(
-      'triaged-label',
-      help: 'Label marking an issue as triaged (defaults to triaged-ecosystem on flutter/flutter).',
-    )
-    ..addOption(
-      'workflow-repo',
-      help:
-          'GitHub owner/repo hosting the refresh workflow (defaults to '
-          'GITHUB_REPOSITORY or tarrinneal/packages-triage).',
-    )
     ..addFlag(
       'show-hidden',
       negatable: false,
       help:
-          'Show PRs labeled ${defaultHiddenLabels.join(', ')} by default. '
+          'Show PRs labeled ${config.hiddenLabels.join(', ')} by default. '
           '(The HTML report always has a button to show them.)',
     )
     ..addOption('limit', help: 'Only analyze the <n> newest open PRs, for quick checks.')
@@ -107,9 +90,8 @@ Future<void> main(List<String> arguments) async {
       '''
 Usage: dart run bin/pr_inspector.dart [<owner>/<repo> ...] [options]
 
-Sorts the open PRs in one or more repositories (${_defaultRepos.join(' and ')} by default,
-or the repositories in triage.yaml / TRIAGE_REPOS) by who needs to act next and how long
-they have been waiting.
+Sorts the open PRs in one or more repositories (configured in configs/*.dart)
+by who needs to act next and how long they have been waiting.
 
 Reads a GitHub token from the $tokenVariable (or $ghTokenVariable) environment variable,
 from a "$tokenVariable=<token>" line in .env (${envFile.path} or ~/.config/pr_inspector/.env),
@@ -141,34 +123,30 @@ ${parser.usage}''';
   }
 }
 
-List<String> _parseRepoList(String raw) => raw
-    .split(RegExp(r'[\s,]+'))
-    .map((String s) => s.trim())
-    .where((String s) => s.isNotEmpty)
-    .toList();
-
-TriageConfig _loadConfig(ArgResults results) {
+Map<String, TriageConfig> _loadConfigs(ArgResults results) {
   final String? configPath = results.option('config');
   if (configPath != null) {
     final file = File(configPath);
     if (!file.existsSync()) {
       throw _UsageException('Config file $configPath does not exist.');
     }
+    final String name = file.uri.pathSegments.last.replaceAll(RegExp(r'\.dart$'), '');
     try {
-      return TriageConfig.fromFile(file);
+      return <String, TriageConfig>{name: parseDartConfigFile(file)};
     } on FormatException catch (e) {
       throw _UsageException('Invalid config file $configPath: ${e.message}');
     }
   }
-  final File defaultFile = configFileFor(Platform.script);
-  if (defaultFile.existsSync()) {
-    try {
-      return TriageConfig.fromFile(defaultFile);
-    } on FormatException catch (e) {
-      throw _UsageException('Invalid config file ${defaultFile.path}: ${e.message}');
+  final Directory configsDir = configsDirectoryFor(Platform.script);
+  try {
+    final Map<String, TriageConfig> loaded = loadConfigsDirectory(configsDir);
+    if (loaded.isNotEmpty) {
+      return loaded;
     }
+  } on FormatException catch (e) {
+    throw _UsageException('Invalid config in ${configsDir.path}: ${e.message}');
   }
-  return const TriageConfig();
+  return const <String, TriageConfig>{'ecosystem': defaultConfig};
 }
 
 Future<void> _run(ArgResults results, String usage, File envFile, List<File> envFiles) async {
@@ -176,84 +154,28 @@ Future<void> _run(ArgResults results, String usage, File envFile, List<File> env
     stdout.writeln(usage);
     return;
   }
-  final TriageConfig config = _loadConfig(results);
+  final Map<String, TriageConfig> configs = _loadConfigs(results);
   final hasExplicitConfig = results.option('config') != null;
   final int? prNumber = _positiveInt(results, 'pr');
   if (prNumber != null && results.rest.length > 1) {
     throw _UsageException('Provide at most one repository when using --pr.');
   }
-  final String? configuredReposRaw = readConfigValue(
-    environment: Platform.environment,
-    envFiles: envFiles,
-    key: 'TRIAGE_REPOS',
-  );
-  final List<String> configuredRepos = configuredReposRaw == null
-      ? const <String>[]
-      : _parseRepoList(configuredReposRaw);
-  final List<String> fallbackRepos = configuredRepos.isNotEmpty ? configuredRepos : config.repos;
-  final List<String> repos = results.rest.isNotEmpty
-      ? results.rest
-      : (prNumber != null ? <String>[fallbackRepos.first] : fallbackRepos);
-  for (final repo in repos) {
+  for (final String repo in results.rest) {
     if (!RegExp(r'^[\w.-]+/[\w.-]+$').hasMatch(repo)) {
       throw _UsageException('"$repo" is not a repository in owner/repo form.');
     }
   }
-  final bool usesConfiguredRepos =
-      hasExplicitConfig ||
-      repos.every((String r) => r.startsWith('flutter/') || config.repos.contains(r));
-  final String? envApprovals = readConfigValue(
-    environment: Platform.environment,
-    envFiles: envFiles,
-    key: 'TRIAGE_REQUIRED_APPROVALS',
-  );
-  final int requiredApprovals =
-      _positiveInt(results, 'required-approvals') ??
-      (envApprovals != null ? int.tryParse(envApprovals) : null) ??
-      (usesConfiguredRepos ? config.requiredApprovals : 1);
-  final bool showAllLabels =
-      results.flag('all-labels') || config.showAllLabels || !usesConfiguredRepos;
-  final Set<String> hiddenLabels = usesConfiguredRepos ? config.hiddenLabels : const <String>{};
   final int? limit = _positiveInt(results, 'limit');
   final String? htmlPath = results.option('html');
   final String? recordPath = results.option('record');
   final String? replayPath = results.option('replay');
   final bool showHidden = results.flag('show-hidden');
   final bool includeIssues = results.flag('issues');
-  final String? teamLabelOption =
-      results.option('team-label') ??
-      readConfigValue(
-        environment: Platform.environment,
-        envFiles: envFiles,
-        key: 'TRIAGE_TEAM_LABEL',
-      );
-  final String? fyiLabelOption =
-      results.option('fyi-label') ??
-      readConfigValue(
-        environment: Platform.environment,
-        envFiles: envFiles,
-        key: 'TRIAGE_FYI_LABEL',
-      );
-  final String? triagedLabelOption =
-      results.option('triaged-label') ??
-      readConfigValue(
-        environment: Platform.environment,
-        envFiles: envFiles,
-        key: 'TRIAGE_TRIAGED_LABEL',
-      );
-  final String workflowRepo =
-      results.option('workflow-repo') ??
-      readConfigValue(
-        environment: Platform.environment,
-        envFiles: envFiles,
-        key: 'TRIAGE_WORKFLOW_REPO',
-      ) ??
-      readConfigValue(
-        environment: Platform.environment,
-        envFiles: envFiles,
-        key: 'GITHUB_REPOSITORY',
-      ) ??
-      config.workflowRepo;
+  final String? envWorkflowRepo = readConfigValue(
+    environment: Platform.environment,
+    envFiles: envFiles,
+    key: 'GITHUB_REPOSITORY',
+  );
   if (results.flag('open') && htmlPath == null) {
     throw _UsageException('--open requires --html.');
   }
@@ -291,15 +213,28 @@ Future<void> _run(ArgResults results, String usage, File envFile, List<File> env
   );
   final stopwatch = Stopwatch()..start();
   try {
+    final TriageConfig primaryConfig = configs.values.first;
     if (prNumber != null) {
+      final String targetRepo = results.rest.isNotEmpty
+          ? results.rest.first
+          : primaryConfig.repos.first;
+      final bool usesConfiguredRepos =
+          hasExplicitConfig ||
+          targetRepo.startsWith('flutter/') ||
+          primaryConfig.repos.contains(targetRepo);
       await _explainPR(
         client,
-        repos.first,
+        targetRepo,
         prNumber,
-        requiredApprovals: requiredApprovals,
-        config: config,
+        requiredApprovals: usesConfiguredRepos ? primaryConfig.requiredApprovals : 1,
+        config: primaryConfig,
       );
-    } else {
+    } else if (results.rest.isNotEmpty || hasExplicitConfig || htmlPath == null) {
+      // Single report run (explicit CLI repos, explicit --config file, or text output).
+      final List<String> repos = results.rest.isNotEmpty ? results.rest : primaryConfig.repos;
+      final bool usesConfiguredRepos =
+          hasExplicitConfig ||
+          repos.every((String r) => r.startsWith('flutter/') || primaryConfig.repos.contains(r));
       final bool refresh = results.flag('refresh') || recordPath != null;
       await _report(
         client,
@@ -308,19 +243,87 @@ Future<void> _run(ArgResults results, String usage, File envFile, List<File> env
         htmlFile: htmlPath == null ? null : File(htmlPath),
         open: results.flag('open'),
         showHidden: showHidden,
-        hiddenLabels: hiddenLabels,
-        showAllLabels: showAllLabels,
-        requiredApprovals: requiredApprovals,
+        hiddenLabels: usesConfiguredRepos ? primaryConfig.hiddenLabels : const <String>{},
+        showAllLabels: primaryConfig.showAllLabels || !usesConfiguredRepos,
+        requiredApprovals: usesConfiguredRepos ? primaryConfig.requiredApprovals : 1,
         includeIssues: includeIssues,
-        teamLabelOption: teamLabelOption,
-        fyiLabelOption: fyiLabelOption,
-        triagedLabelOption: triagedLabelOption,
-        workflowRepo: workflowRepo,
+        workflowRepo: envWorkflowRepo ?? primaryConfig.workflowRepo,
         usesConfiguredRepos: usesConfiguredRepos,
-        config: config,
+        config: primaryConfig,
+        activeConfigName: configs.keys.first,
         live: replayPath == null,
         refresh: refresh,
       );
+    } else {
+      // Multi-config HTML build across configs/*.dart files (optionally filtered
+      // by --only or --only-schedule while preserving switcher links to all configs).
+      final rootHtmlFile = File(htmlPath);
+      final Directory siteDir = rootHtmlFile.parent;
+      final String baseName = rootHtmlFile.uri.pathSegments.last;
+      final List<String> allConfigNames = configs.keys.toList();
+      final String primaryName = allConfigNames.first;
+      final bool refresh = results.flag('refresh') || recordPath != null;
+      final String? onlyConfig = results.option('only')?.trim();
+      final String? onlySchedule = results.option('only-schedule')?.trim();
+
+      if (onlyConfig != null && onlyConfig.isNotEmpty && !configs.containsKey(onlyConfig)) {
+        throw _UsageException(
+          'Unknown config "$onlyConfig". Available configs: ${allConfigNames.join(', ')}',
+        );
+      }
+
+      final targetEntries = <MapEntry<String, TriageConfig>>[
+        for (final MapEntry<String, TriageConfig> entry in configs.entries)
+          if ((onlyConfig == null || onlyConfig.isEmpty || entry.key == onlyConfig) &&
+              (onlySchedule == null ||
+                  onlySchedule.isEmpty ||
+                  entry.value.refreshSchedule?.trim() == onlySchedule))
+            entry,
+      ];
+      if (targetEntries.isEmpty) {
+        stderr.writeln(
+          'No configs in configs/ matched schedule "${onlySchedule ?? ''}"; nothing to refresh.',
+        );
+        return;
+      }
+
+      for (final entry in targetEntries) {
+        final String configName = entry.key;
+        final TriageConfig config = entry.value;
+        final subHtmlFile = File(
+          '${siteDir.path}${Platform.pathSeparator}$configName${Platform.pathSeparator}$baseName',
+        );
+        final subLinks = <({String name, String dirPrefix})>[
+          for (final String name in allConfigNames)
+            (name: name, dirPrefix: name == configName ? '' : '../$name/'),
+        ];
+        final isPrimary = configName == primaryName;
+        final rootLinks = <({String name, String dirPrefix})>[
+          for (final String name in allConfigNames) (name: name, dirPrefix: '$name/'),
+        ];
+        stderr.writeln('=== Generating triage pages for config "$configName" ===');
+        await _report(
+          client,
+          config.repos,
+          limit: limit,
+          htmlFile: subHtmlFile,
+          mirrorRootHtmlFile: isPrimary ? rootHtmlFile : null,
+          open: isPrimary && results.flag('open'),
+          showHidden: showHidden,
+          hiddenLabels: config.hiddenLabels,
+          showAllLabels: config.showAllLabels,
+          requiredApprovals: config.requiredApprovals,
+          includeIssues: includeIssues,
+          workflowRepo: envWorkflowRepo ?? config.workflowRepo,
+          usesConfiguredRepos: true,
+          config: config,
+          activeConfigName: configName,
+          configLinks: subLinks,
+          mirrorRootConfigLinks: rootLinks,
+          live: replayPath == null,
+          refresh: refresh,
+        );
+      }
     }
   } on GitHubException catch (e) {
     if (e.statusCode != 401 || token == null) {
@@ -396,18 +399,20 @@ Future<void> _report(
   List<String> repos, {
   required int? limit,
   required File? htmlFile,
+  File? mirrorRootHtmlFile,
   required bool open,
   required bool showHidden,
   required Set<String> hiddenLabels,
   required bool showAllLabels,
   required int requiredApprovals,
   required bool includeIssues,
-  required String? teamLabelOption,
-  required String? fyiLabelOption,
-  required String? triagedLabelOption,
   required String workflowRepo,
   required bool usesConfiguredRepos,
   required TriageConfig config,
+  String? activeConfigName,
+  List<({String name, String dirPrefix})> configLinks = const <({String name, String dirPrefix})>[],
+  List<({String name, String dirPrefix})> mirrorRootConfigLinks =
+      const <({String name, String dirPrefix})>[],
   required bool live,
   required bool refresh,
 }) async {
@@ -492,18 +497,13 @@ Future<void> _report(
 
   final String issuesRepo = defaultIssuesRepoFor(repos.first, config: config);
   final bool useConfigIssueLabels = usesConfiguredRepos && issuesRepo == config.issuesRepo;
-  final String? effectiveTeamLabel =
-      teamLabelOption ??
-      (useConfigIssueLabels
-          ? ((config.issueTeamLabel?.isEmpty ?? true) ? null : config.issueTeamLabel)
-          : null);
-  final String? effectiveFyiLabel =
-      fyiLabelOption ??
-      (useConfigIssueLabels
-          ? ((config.issueFyiLabel?.isEmpty ?? true) ? null : config.issueFyiLabel)
-          : null);
-  final String effectiveTriagedLabel =
-      triagedLabelOption ?? (useConfigIssueLabels ? config.issueTriagedLabel : 'triaged');
+  final String? effectiveTeamLabel = useConfigIssueLabels
+      ? ((config.issueTeamLabel?.isEmpty ?? true) ? null : config.issueTeamLabel)
+      : null;
+  final String? effectiveFyiLabel = useConfigIssueLabels
+      ? ((config.issueFyiLabel?.isEmpty ?? true) ? null : config.issueFyiLabel)
+      : null;
+  final String effectiveTriagedLabel = useConfigIssueLabels ? config.issueTriagedLabel : 'triaged';
   final DetailCache? issuesCache = !live || !includeIssues
       ? null
       : DetailCache.load(
@@ -587,41 +587,56 @@ Future<void> _report(
       config: config,
     );
   } else {
-    final File stateFile = stateFileFor(htmlFile);
-    final Map<int, PreviousPlacement>? previous =
-        readReportState(stateFile, repo: repoLabel) ??
-        readReportState(stateFile, repo: repos.first);
-    writeHtmlReport(
-      repo: repoLabel,
-      prs: analyses,
-      issues: issueAnalyses,
-      issuesRepo: issuesRepo,
-      communityFile: htmlFile,
-      generatedAt: now,
-      previous: previous,
-      suggestedReviewers: suggestedReviewers,
-      hiddenLabels: hiddenLabels,
-      showHiddenByDefault: showHidden,
-      showAllLabels: showAllLabels,
-      workflowRepo: workflowRepo,
-      teamLabel: effectiveTeamLabel,
-      fyiLabel: effectiveFyiLabel,
-      config: config,
-      note: <String>[
-        if (limit != null) 'Partial report: only the $limit newest open PRs were analyzed.',
-        if (!live) 'Replayed from a recording made ${formatAsMinute(now)}.',
-      ].join(' ').nullIfEmpty,
-    );
-    // Partial and replayed runs would make the next report's badges wrong.
-    if (limit == null && live) {
-      writeReportState(stateFile, analyses, repo: repoLabel, generatedAt: now, previous: previous);
+    void writeTargetHtml(File targetFile, List<({String name, String dirPrefix})> links) {
+      final File stateFile = stateFileFor(targetFile);
+      final Map<int, PreviousPlacement>? previous =
+          readReportState(stateFile, repo: repoLabel) ??
+          readReportState(stateFile, repo: repos.first);
+      writeHtmlReport(
+        repo: repoLabel,
+        prs: analyses,
+        issues: issueAnalyses,
+        issuesRepo: issuesRepo,
+        communityFile: targetFile,
+        generatedAt: now,
+        previous: previous,
+        suggestedReviewers: suggestedReviewers,
+        hiddenLabels: hiddenLabels,
+        showHiddenByDefault: showHidden,
+        showAllLabels: showAllLabels,
+        workflowRepo: workflowRepo,
+        teamLabel: effectiveTeamLabel,
+        fyiLabel: effectiveFyiLabel,
+        config: config,
+        activeConfigName: activeConfigName,
+        configLinks: links,
+        note: <String>[
+          if (limit != null) 'Partial report: only the $limit newest open PRs were analyzed.',
+          if (!live) 'Replayed from a recording made ${formatAsMinute(now)}.',
+        ].join(' ').nullIfEmpty,
+      );
+      // Partial and replayed runs would make the next report's badges wrong.
+      if (limit == null && live) {
+        writeReportState(
+          stateFile,
+          analyses,
+          repo: repoLabel,
+          generatedAt: now,
+          previous: previous,
+        );
+      }
+      stderr.writeln(
+        'Wrote ${targetFile.path}, ${teamPageFileFor(targetFile).path}, '
+        'and ${issuesPageFileFor(targetFile).path}.',
+      );
     }
-    stderr.writeln(
-      'Wrote ${htmlFile.path}, ${teamPageFileFor(htmlFile).path}, '
-      'and ${issuesPageFileFor(htmlFile).path}.',
-    );
+
+    writeTargetHtml(htmlFile, configLinks);
+    if (mirrorRootHtmlFile != null) {
+      writeTargetHtml(mirrorRootHtmlFile, mirrorRootConfigLinks);
+    }
     if (open) {
-      await _openInBrowser(htmlFile);
+      await _openInBrowser(mirrorRootHtmlFile ?? htmlFile);
     }
   }
   _printSummary(
