@@ -89,6 +89,57 @@ OTHER="x" # GITHUB_TOKEN=nope
       final File placeholder = _writeFile(dir, '.env', '# Paste it below.\nGITHUB_TOKEN=\n');
       expect(findToken(environment: <String, String>{}, envFile: placeholder), isNull);
     });
+
+    test('supports GH_TOKEN, additional .env files, and gh CLI fallback', () {
+      final Directory dir = _tempDir();
+      final missing = File('${dir.path}${Platform.pathSeparator}.env');
+      final File fallbackEnv = _writeFile(dir, 'fallback.env', 'GH_TOKEN=from-fallback\n');
+      expect(
+        findToken(
+          environment: <String, String>{'GH_TOKEN': 'from-gh-env'},
+          envFile: missing,
+          additionalEnvFiles: <File>[fallbackEnv],
+          ghCliToken: () => 'from-cli',
+        ),
+        (value: 'from-gh-env', source: 'the GH_TOKEN environment variable'),
+      );
+      expect(
+        findToken(
+          environment: <String, String>{},
+          envFile: missing,
+          additionalEnvFiles: <File>[fallbackEnv],
+          ghCliToken: () => 'from-cli',
+        ),
+        (value: 'from-fallback', source: fallbackEnv.path),
+      );
+      expect(
+        findToken(environment: <String, String>{}, envFile: missing, ghCliToken: () => 'from-cli'),
+        (value: 'from-cli', source: 'the GitHub CLI (gh auth token)'),
+      );
+    });
+  });
+
+  group('readConfigValue', () {
+    test('reads from environment first, then envFiles', () {
+      final Directory dir = _tempDir();
+      final File envFile = _writeFile(dir, '.env', 'TRIAGE_REPOS=acme/widgets\n');
+      expect(
+        readConfigValue(
+          environment: <String, String>{'TRIAGE_REPOS': 'acme/override'},
+          envFiles: <File>[envFile],
+          key: 'TRIAGE_REPOS',
+        ),
+        'acme/override',
+      );
+      expect(
+        readConfigValue(
+          environment: <String, String>{},
+          envFiles: <File>[envFile],
+          key: 'TRIAGE_REPOS',
+        ),
+        'acme/widgets',
+      );
+    });
   });
 
   group('envFileFor', () {

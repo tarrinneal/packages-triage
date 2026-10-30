@@ -34,6 +34,8 @@ String _stem(String path) {
 
 String _basename(String path) => path.substring(_lastSeparator(path) + 1);
 
+const String _unsetReportLabel = '\u0000';
+
 /// Writes the report as linked HTML pages: community and bot PRs to
 /// [communityFile], team PRs to [teamPageFileFor] it, and actionable package
 /// issues to [issuesPageFileFor] it.
@@ -52,10 +54,24 @@ void writeHtmlReport({
   String? issuesRepo,
   Map<int, PreviousPlacement>? previous,
   Map<String, String> suggestedReviewers = const <String, String>{},
-  Set<String> hiddenLabels = defaultHiddenLabels,
+  Set<String>? hiddenLabels,
   bool showHiddenByDefault = false,
+  bool? showAllLabels,
+  String? workflowRepo,
+  String? teamLabel = _unsetReportLabel,
+  String? fyiLabel = _unsetReportLabel,
+  TriageConfig config = const TriageConfig(),
   String? note,
 }) {
+  final Set<String> effectiveHiddenLabels = hiddenLabels ?? config.hiddenLabels;
+  final bool effectiveShowAllLabels = showAllLabels ?? config.showAllLabels;
+  final String effectiveWorkflowRepo = workflowRepo ?? config.workflowRepo;
+  final String? effectiveTeamLabel = identical(teamLabel, _unsetReportLabel)
+      ? config.issueTeamLabel
+      : teamLabel;
+  final String? effectiveFyiLabel = identical(fyiLabel, _unsetReportLabel)
+      ? config.issueFyiLabel
+      : fyiLabel;
   final File issuesFile = issuesPageFileFor(communityFile);
   final files = <ReportPage, File>{
     ReportPage.community: communityFile,
@@ -72,8 +88,11 @@ void writeHtmlReport({
       generatedAt: generatedAt,
       previous: previous,
       suggestedReviewers: suggestedReviewers,
-      hiddenLabels: hiddenLabels,
+      hiddenLabels: effectiveHiddenLabels,
       showHiddenByDefault: showHiddenByDefault,
+      showAllLabels: effectiveShowAllLabels,
+      workflowRepo: effectiveWorkflowRepo,
+      config: config,
       note: note,
     ).render();
     files[page]!
@@ -88,6 +107,11 @@ void writeHtmlReport({
     issuesFile: issuesFile,
     generatedAt: generatedAt,
     suggestedReviewers: suggestedReviewers,
+    showAllLabels: effectiveShowAllLabels,
+    workflowRepo: effectiveWorkflowRepo,
+    teamLabel: effectiveTeamLabel,
+    fyiLabel: effectiveFyiLabel,
+    config: config,
     note: note,
   ).render();
   issuesFile
@@ -108,6 +132,9 @@ class _PageRenderer {
     required this.suggestedReviewers,
     required this.hiddenLabels,
     required this.showHiddenByDefault,
+    required this.showAllLabels,
+    required this.workflowRepo,
+    required this.config,
     required this.note,
   }) : pagePRs = prs.where((PRAnalysis a) => a.page == page).toList();
 
@@ -123,6 +150,9 @@ class _PageRenderer {
   final Map<String, String> suggestedReviewers;
   final Set<String> hiddenLabels;
   final bool showHiddenByDefault;
+  final bool showAllLabels;
+  final String workflowRepo;
+  final TriageConfig config;
   final String? note;
 
   final StringBuffer _out = StringBuffer();
@@ -130,7 +160,7 @@ class _PageRenderer {
   bool _startsHidden(PRAnalysis analysis) =>
       (hiddenLabels.isNotEmpty &&
           showHiddenByDefault != hasHiddenLabel(analysis.pr, hiddenLabels)) ||
-      hasWaitingForResponseLabel(analysis.pr.labels);
+      hasWaitingForResponseLabel(analysis.pr.labels, config: config);
 
   List<PRAnalysis> _inSection(Section section) =>
       pagePRs.where((PRAnalysis a) => a.section == section).toList();
@@ -148,6 +178,9 @@ class _PageRenderer {
     sections.forEach(_writeSection);
     _writeLegend();
     _out
+      ..writeln(
+        '<aside id="triage-companion-dock" class="companion-dock" hidden aria-label="Triage companion"></aside>',
+      )
       ..writeln('<script>')
       ..write(_script)
       ..writeln('</script>')
@@ -167,7 +200,7 @@ class _PageRenderer {
 <style>
 $_css</style>
 </head>
-<body data-hidden-labels="${_escape(hiddenLabels.join('|'))}" data-show-hidden-default="$showHiddenByDefault" data-generated-at="${_escape(generatedAt.toUtc().toIso8601String())}" data-workflow-repo="tarrinneal/packages-triage">
+<body data-hidden-labels="${_escape(hiddenLabels.join('|'))}" data-show-hidden-default="$showHiddenByDefault" data-generated-at="${_escape(generatedAt.toUtc().toIso8601String())}" data-workflow-repo="${_escape(workflowRepo)}">
 ''');
   }
 
@@ -183,10 +216,10 @@ $_css</style>
         .length;
     final int nonHiddenCount = pagePRs.length - hiddenCount;
     final int waitingResponseCount = pagePRs
-        .where((PRAnalysis a) => hasWaitingForResponseLabel(a.pr.labels))
+        .where((PRAnalysis a) => hasWaitingForResponseLabel(a.pr.labels, config: config))
         .length;
     final int followUpCount = pagePRs.where((PRAnalysis a) => a.isFollowUp).length;
-    final hiddenLabel = hiddenLabels.join('/');
+    final String hiddenLabel = hiddenLabels.join('/');
     final int failed = _inSection(Section.loadError).length;
     _out.write('''
 <header>
@@ -199,18 +232,22 @@ $_css</style>
 ''');
     if (hiddenLabels.isNotEmpty) {
       _out.writeln(
-        '<div class="filter-group" role="group" aria-label="Design filter">'
-        '<label class="filter-chip"><input id="show-non-design" type="checkbox"${showHiddenByDefault ? '' : ' checked'}>'
-        '<span>triage-packages ($nonHiddenCount)</span></label>'
-        '<label class="filter-chip"><input id="show-design" type="checkbox"${showHiddenByDefault ? ' checked' : ''}>'
-        '<span>${_escape(hiddenLabel)} ($hiddenCount)</span></label>'
-        '</div>',
+        <String>[
+          '<div class="filter-group" role="group" aria-label="Design filter">',
+          '<label class="filter-chip"><input id="show-non-design" type="checkbox"${showHiddenByDefault ? '' : ' checked'}>',
+          '<span>${_escape(config.nonHiddenFilterLabel)} ($nonHiddenCount)</span></label>',
+          '<label class="filter-chip"><input id="show-design" type="checkbox"${showHiddenByDefault ? ' checked' : ''}>',
+          '<span>${_escape(hiddenLabel)} ($hiddenCount)</span></label>',
+          '</div>',
+        ].join(),
       );
     }
     _out
       ..writeln(
-        '<label class="filter-chip"><input id="hide-waiting-response" type="checkbox" checked>'
-        '<span>Hide waiting-for-response ($waitingResponseCount)</span></label>',
+        '<label class="filter-chip"><input id="hide-waiting-response" type="checkbox" checked><span>Hide waiting-for-response ($waitingResponseCount)</span></label>',
+      )
+      ..writeln(
+        '<button id="open-companion" type="button" title="Open an always-on-top floating window with the active row&#39;s triage details">🪟 Triage companion</button>',
       )
       ..writeln('<button id="refresh-report" type="button">↻ Refresh report</button>')
       ..writeln('<span id="refresh-status" class="refresh-status" aria-live="polite"></span>')
@@ -307,7 +344,11 @@ $_css</style>
       ..write(classes.isEmpty ? '' : ' class="${classes.join(' ')}"')
       ..write(' data-number="${pr.number}"')
       ..write(' data-labels="${_escape(pr.labels.join('|'))}"')
-      ..write(hasWaitingForResponseLabel(pr.labels) ? ' data-waiting-response="true"' : '')
+      ..write(
+        hasWaitingForResponseLabel(pr.labels, config: config)
+            ? ' data-waiting-response="true"'
+            : '',
+      )
       ..write(analysis.isFollowUp ? ' data-followup="true"' : '')
       ..write(' data-search="${_escape(search)}"')
       ..write(' data-waiting="${analysis.waitingDays}"')
@@ -361,9 +402,10 @@ $_css</style>
       if (pr.repo.isNotEmpty && pr.repo != repo)
         '<span class="label repo-label">${_escape(pr.repo.split('/').last)}</span>',
       for (final String label in pr.labels)
-        if (isRoutingLabel(label) ||
+        if ((showAllLabels && !label.startsWith('cla:')) ||
+            isRoutingLabel(label, config: config) ||
             hiddenLabels.contains(label) ||
-            waitingForResponseLabels.contains(label))
+            config.waitingForResponseLabels.contains(label))
           _labelChip(label),
     ];
     return chips.isEmpty ? '' : '<div class="labels">${chips.join()}</div>';
@@ -371,7 +413,11 @@ $_css</style>
 
   String _labelChip(String label) {
     final classes = hiddenLabels.contains(label) ? 'label hidden-label' : 'label';
-    final String? tooltip = _packageReviewerTooltip(label, suggestedReviewers);
+    final String? tooltip = _packageReviewerTooltip(
+      label,
+      suggestedReviewers,
+      packageLabelPrefix: config.packageLabelPrefix,
+    );
     final titleAttr = tooltip == null ? '' : ' title="${_escape(tooltip)}"';
     return '<span class="$classes"$titleAttr>${_escape(label)}</span>';
   }
@@ -382,6 +428,7 @@ $_css</style>
 <h2>Legend</h2>
 <ul>
 <li>Sections are sorted by how long each PR has been waiting on whoever needs to act next. Hover over a waiting time to see why a PR is where it is.</li>
+<li>Click any row or <strong>🪟 Triage companion</strong> to open an always-on-top floating window with that item's expanded waiting reasons, suggested reviewers, and queue navigation while viewing GitHub.</li>
 <li>Waiting: <span class="urgency-notYet">under ${dueDays}d</span> · <span class="urgency-due">due at ${dueDays}d</span> · <span class="urgency-overdue">overdue at ${overdueDays}d</span> · <span class="urgency-critical">critical at ${criticalDays}d</span> (community PRs waiting this long on their author are candidates for closing). Rows that aren't due yet are dimmed.</li>
 <li>Reviewers: ${emojiForReviewState(ReviewState.changesRequested)} changes requested · ${emojiForReviewState(ReviewState.commented)} commented · ${emojiForReviewState(ReviewState.pending)} review requested · ${emojiForReviewState(ReviewState.approved)} approved</li>
 <li>Authors: ${emojiForContributorType(ContributorType.community)} community · ${emojiForContributorType(ContributorType.member)} team · ${emojiForContributorType(ContributorType.bot)} bot</li>
@@ -401,6 +448,11 @@ class _IssuesPageRenderer {
     required this.issuesFile,
     required this.generatedAt,
     required this.suggestedReviewers,
+    required this.showAllLabels,
+    required this.workflowRepo,
+    required this.teamLabel,
+    required this.fyiLabel,
+    required this.config,
     required this.note,
   });
 
@@ -411,11 +463,17 @@ class _IssuesPageRenderer {
   final File issuesFile;
   final DateTime generatedAt;
   final Map<String, String> suggestedReviewers;
+  final bool showAllLabels;
+  final String workflowRepo;
+  final String? teamLabel;
+  final String? fyiLabel;
+  final TriageConfig config;
   final String? note;
 
   final StringBuffer _out = StringBuffer();
 
-  bool _startsHidden(IssueAnalysis analysis) => hasWaitingForResponseLabel(analysis.issue.labels);
+  bool _startsHidden(IssueAnalysis analysis) =>
+      hasWaitingForResponseLabel(analysis.issue.labels, config: config);
 
   List<IssueAnalysis> _inSection(IssueSection section) =>
       issues.where((IssueAnalysis a) => a.section == section).toList();
@@ -423,10 +481,17 @@ class _IssuesPageRenderer {
   int _visibleCount(IssueSection section) =>
       _inSection(section).where((IssueAnalysis a) => !_startsHidden(a)).length;
 
+  String _sectionTitle(IssueSection section) =>
+      issueSectionTitle(section, teamLabel: teamLabel, fyiLabel: fyiLabel, config: config);
+
   String render() {
     final sections = <IssueSection>[
       for (final IssueSection section in IssueSection.values)
-        if (section != IssueSection.loadError || _inSection(section).isNotEmpty) section,
+        if ((section != IssueSection.loadError || _inSection(section).isNotEmpty) &&
+            (section != IssueSection.fyiEcosystem ||
+                (fyiLabel != null && fyiLabel!.isNotEmpty) ||
+                _inSection(section).isNotEmpty))
+          section,
     ];
     _out.write('''
 <!DOCTYPE html>
@@ -438,12 +503,15 @@ class _IssuesPageRenderer {
 <style>
 $_css</style>
 </head>
-<body data-hidden-labels="" data-show-hidden-default="true" data-generated-at="${_escape(generatedAt.toUtc().toIso8601String())}" data-workflow-repo="tarrinneal/packages-triage">
+<body data-hidden-labels="" data-show-hidden-default="true" data-generated-at="${_escape(generatedAt.toUtc().toIso8601String())}" data-workflow-repo="${_escape(workflowRepo)}">
 ''');
     _writeHeader(sections);
     sections.forEach(_writeSection);
     _writeLegend();
     _out
+      ..writeln(
+        '<aside id="triage-companion-dock" class="companion-dock" hidden aria-label="Triage companion"></aside>',
+      )
       ..writeln('<script>')
       ..write(_script)
       ..writeln('</script>')
@@ -461,7 +529,7 @@ $_css</style>
     final sectionLinks = <String>[for (final section in sections) _sectionLink(section)];
     final int followUpCount = issues.where((IssueAnalysis a) => a.isFollowUp).length;
     final int waitingResponseCount = issues
-        .where((IssueAnalysis a) => hasWaitingForResponseLabel(a.issue.labels))
+        .where((IssueAnalysis a) => hasWaitingForResponseLabel(a.issue.labels, config: config))
         .length;
     final int failed = _inSection(IssueSection.loadError).length;
     _out.write('''
@@ -473,6 +541,7 @@ $_css</style>
 <div class="controls">
 <button id="toggle-followup" type="button" aria-pressed="false"${followUpCount == 0 ? ' disabled' : ''}>Follow-up issues ($followUpCount)</button>
 <label class="filter-chip"><input id="hide-waiting-response" type="checkbox" checked><span>Hide waiting-for-response ($waitingResponseCount)</span></label>
+<button id="open-companion" type="button" title="Open an always-on-top floating window with the active row&#39;s triage details">🪟 Triage companion</button>
 <button id="refresh-report" type="button">↻ Refresh report</button>
 <span id="refresh-status" class="refresh-status" aria-live="polite"></span>
 </div>
@@ -496,7 +565,7 @@ $_css</style>
       '<a href="${_escape(_basename(files[other]!.path))}">${pageTitle(other)} ($count)</a>';
 
   String _sectionLink(IssueSection section) =>
-      '<a href="#${section.name}">${_escape(issueSectionTitle(section))} '
+      '<a href="#${section.name}">${_escape(_sectionTitle(section))} '
       '(<span data-count="${section.name}">${_visibleCount(section)}</span>)</a>';
 
   void _writeSection(IssueSection section) {
@@ -505,7 +574,7 @@ $_css</style>
     final disabledAttr = visible == 0 ? ' disabled' : '';
     _out.write('''
 <details id="${section.name}" data-section="${section.name}" open>
-<summary><h2>${_escape(issueSectionTitle(section))} (<span data-count="${section.name}">$visible</span>)</h2><span class="section-actions"><button type="button" class="section-btn open-batch"$disabledAttr>Open first 10</button><button type="button" class="section-btn open-all"$disabledAttr>Open all</button></span></summary>
+<summary><h2>${_escape(_sectionTitle(section))} (<span data-count="${section.name}">$visible</span>)</h2><span class="section-actions"><button type="button" class="section-btn open-batch"$disabledAttr>Open first 10</button><button type="button" class="section-btn open-all"$disabledAttr>Open all</button></span></summary>
 <table>
 <thead>
 <tr>
@@ -558,7 +627,11 @@ $_css</style>
       ..write(classes.isEmpty ? '' : ' class="${classes.join(' ')}"')
       ..write(' data-number="${issue.number}"')
       ..write(' data-labels="${_escape(issue.labels.join('|'))}"')
-      ..write(hasWaitingForResponseLabel(issue.labels) ? ' data-waiting-response="true"' : '')
+      ..write(
+        hasWaitingForResponseLabel(issue.labels, config: config)
+            ? ' data-waiting-response="true"'
+            : '',
+      )
       ..write(analysis.isFollowUp ? ' data-followup="true"' : '')
       ..write(' data-search="${_escape(search)}"')
       ..write(' data-waiting="${analysis.waitingDays}"')
@@ -602,28 +675,46 @@ $_css</style>
   String _issueLabelChips(IssueInfo issue) {
     final chips = <String>[
       for (final String label in issue.labels)
-        if (isIssueDisplayLabel(label)) _issueLabelChip(label),
+        if ((showAllLabels && !label.startsWith('cla:')) ||
+            isIssueDisplayLabel(label, config: config) ||
+            label == teamLabel ||
+            label == fyiLabel)
+          _issueLabelChip(label),
     ];
     return chips.isEmpty ? '' : '<div class="labels">${chips.join()}</div>';
   }
 
   String _issueLabelChip(String label) {
-    final priorityClass = label == 'P0'
+    final bool isTopPriority =
+        config.priorityLabels.isNotEmpty && label == config.priorityLabels.first;
+    final priorityClass = isTopPriority
         ? ' priority-p0'
-        : label == 'P1'
+        : config.highPriorityLabels.contains(label)
         ? ' priority-p1'
         : '';
-    final String? tooltip = _packageReviewerTooltip(label, suggestedReviewers);
+    final String? tooltip = _packageReviewerTooltip(
+      label,
+      suggestedReviewers,
+      packageLabelPrefix: config.packageLabelPrefix,
+    );
     final titleAttr = tooltip == null ? '' : ' title="${_escape(tooltip)}"';
     return '<span class="label$priorityClass"$titleAttr>${_escape(label)}</span>';
   }
 
   void _writeLegend() {
+    final labelDesc = (teamLabel != null && teamLabel!.isNotEmpty)
+        ? ' labeled <code>${_escape(teamLabel!)}</code>'
+              '${fyiLabel != null && fyiLabel!.isNotEmpty ? ' or <code>${_escape(fyiLabel!)}</code>' : ''}'
+        : '';
+    final lowPriorities = config.lowPriorityLabels.isNotEmpty
+        ? '${_escape(config.lowPriorityLabels.join('/'))} '
+        : '';
     _out.write('''
 <section class="legend">
 <h2>Legend</h2>
 <ul>
-<li>Actionable package issues from ${_escape(issuesRepo)} labeled <code>team-ecosystem</code> or <code>fyi-ecosystem</code>. Already-triaged P2/P3 issues that are not waiting on a response are omitted.</li>
+<li>Actionable package issues from ${_escape(issuesRepo)}$labelDesc. Already-triaged ${lowPriorities}issues that are not waiting on a response are omitted.</li>
+<li>Click any row or <strong>🪟 Triage companion</strong> to open an always-on-top floating window with that issue's expanded waiting reasons, suggested reviewers, and queue navigation while viewing GitHub.</li>
 <li><span class="badge follow-up">FOLLOW-UP</span> issue author replied after a team member's comment.</li>
 </ul>
 </section>
@@ -631,11 +722,17 @@ $_css</style>
   }
 }
 
-String? _packageReviewerTooltip(String label, Map<String, String> suggestedReviewers) {
-  if (!label.startsWith('p: ') || suggestedReviewers.isEmpty) {
+String? _packageReviewerTooltip(
+  String label,
+  Map<String, String> suggestedReviewers, {
+  String packageLabelPrefix = defaultPackageLabelPrefix,
+}) {
+  if (packageLabelPrefix.isEmpty ||
+      !label.startsWith(packageLabelPrefix) ||
+      suggestedReviewers.isEmpty) {
     return null;
   }
-  final String pkg = label.substring(3).trim();
+  final String pkg = label.substring(packageLabelPrefix.length).trim();
   final String? exact = suggestedReviewers[pkg];
   if (exact != null) {
     return exact;
@@ -1001,15 +1098,20 @@ const String _css = r'''
     margin: 0;
   }
   tr { font-size: 0.9rem; }
-  tbody tr {
+  tbody tr[data-number] {
     border-bottom: 1px solid var(--row-border);
-    transition: background-color 0.1s;
+    transition: background-color 0.1s, box-shadow 0.1s;
+    cursor: pointer;
   }
   tbody tr:last-child { border-bottom: none; }
   tbody tr:nth-child(even) { background-color: var(--row-even); }
   tbody tr[data-followup="true"] {
     background-color: var(--followup-row);
     box-shadow: inset 4px 0 0 var(--followup-accent);
+  }
+  tbody tr.active-triage-row {
+    background-color: var(--row-hover);
+    box-shadow: inset 4px 0 0 var(--link);
   }
   tbody tr:hover { background-color: var(--row-hover); }
   th, td {
@@ -1243,6 +1345,176 @@ const String _css = r'''
     padding: 4px 10px;
     border-radius: 6px;
   }
+  .companion-dock {
+    position: fixed;
+    right: 20px;
+    bottom: 20px;
+    width: min(560px, calc(100vw - 40px));
+    max-height: calc(100vh - 40px);
+    overflow-y: auto;
+    background: var(--card-bg);
+    border: 1px solid var(--link);
+    border-radius: 14px;
+    box-shadow: 0 12px 32px rgba(15, 23, 42, 0.22);
+    z-index: 1000;
+  }
+  body.pip-companion-body {
+    padding: 0;
+    margin: 0;
+    max-width: none;
+    background: var(--card-bg);
+  }
+  .companion-card {
+    padding: 12px 14px;
+    font-size: 0.84rem;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .companion-topbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  .companion-section-meta {
+    font-size: 0.76rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+  }
+  .companion-nav {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .companion-btn {
+    font-size: 0.76rem;
+    padding: 4px 9px;
+    border-radius: 6px;
+  }
+  .companion-btn.primary {
+    background: var(--btn-active-bg);
+    border-color: var(--btn-active-border);
+    color: #ffffff;
+  }
+  .companion-btn.primary:hover:not(:disabled) {
+    opacity: 0.92;
+  }
+  .companion-queue {
+    display: flex;
+    gap: 5px;
+    overflow-x: auto;
+    padding-bottom: 4px;
+    scrollbar-width: thin;
+  }
+  .queue-pill {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.74rem;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--chip-bg);
+    color: var(--chip-text);
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .queue-pill[data-followup="true"] {
+    border-color: var(--followup-accent);
+  }
+  .queue-pill.active {
+    background: var(--btn-active-bg);
+    border-color: var(--btn-active-border);
+    color: #ffffff;
+  }
+  .companion-title-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .companion-heading {
+    font-size: 0.96rem;
+    font-weight: 600;
+    line-height: 1.35;
+    margin: 0;
+  }
+  .companion-heading .pr-num {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--link);
+    margin-right: 4px;
+  }
+  .companion-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    gap: 8px;
+  }
+  .companion-box {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+  }
+  .companion-box.full {
+    grid-column: 1 / -1;
+  }
+  .companion-box h3 {
+    margin: 0 0 4px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+  }
+  .companion-next {
+    font-size: 0.88rem;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+  .companion-list {
+    margin: 4px 0 0;
+    padding-left: 16px;
+    color: var(--text);
+    font-size: 0.8rem;
+  }
+  .companion-list li {
+    margin: 2px 0;
+  }
+  .copy-handles {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 5px;
+  }
+  .copy-handle {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.73rem;
+    padding: 2px 7px;
+    border-radius: 6px;
+    background: var(--card-bg);
+    border: 1px solid var(--chip-border);
+    color: var(--link);
+    cursor: pointer;
+  }
+  .copy-handle:hover {
+    border-color: var(--link);
+    background: var(--row-hover);
+  }
+  .companion-auto-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.75rem;
+    color: var(--muted);
+    cursor: pointer;
+    user-select: none;
+  }
 ''';
 
 const String _script = r'''
@@ -1253,6 +1525,7 @@ const String _script = r'''
   const nonDesignStorageKey = 'prTriage.showNonDesign';
   const designStorageKey = 'prTriage.showDesign';
   const waitingResponseStorageKey = 'prTriage.hideWaitingForResponse';
+  const companionAutoOpenStorageKey = 'prTriage.companionAutoOpen';
   const tokenStorageKey = 'prTriage.githubToken';
   const lastRunStorageKey = 'prTriage.lastWorkflowRunAt';
   const cooldownMs = 5 * 60 * 1000;
@@ -1261,6 +1534,8 @@ const String _script = r'''
   const showDesignCheckbox = document.getElementById('show-design');
   const followUpToggle = document.getElementById('toggle-followup');
   const hideWaitingCheckbox = document.getElementById('hide-waiting-response');
+  const openCompanionButton = document.getElementById('open-companion');
+  const companionDock = document.getElementById('triage-companion-dock');
   const refreshButton = document.getElementById('refresh-report');
   const refreshStatus = document.getElementById('refresh-status');
   const rows = Array.from(document.querySelectorAll('tbody tr[data-number]'));
@@ -1269,6 +1544,7 @@ const String _script = r'''
   let showNonDesign = showNonDesignCheckbox ? showNonDesignCheckbox.checked : !showHiddenDefault;
   let showDesign = showDesignCheckbox ? showDesignCheckbox.checked : showHiddenDefault;
   let hideWaitingResponse = hideWaitingCheckbox ? hideWaitingCheckbox.checked : true;
+  let companionAutoOpen = true;
   let onlyFollowUp = false;
   try {
     const savedNonDesign = localStorage.getItem(nonDesignStorageKey);
@@ -1286,8 +1562,441 @@ const String _script = r'''
     if (savedWaiting !== null) {
       hideWaitingResponse = savedWaiting === 'true';
     }
+    const savedAutoOpen = localStorage.getItem(companionAutoOpenStorageKey);
+    if (savedAutoOpen !== null) {
+      companionAutoOpen = savedAutoOpen === 'true';
+    }
   } catch (e) {
     // Storage may be unavailable for file: URLs; use the default.
+  }
+
+  let companionQueue = [];
+  let companionIndex = 0;
+  let companionQueueLabel = '';
+  let pipWindow = null;
+  const openedTabsByUrl = new Map();
+
+  function escapeHtml(str) {
+    return String(str || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+  }
+
+  function extractHandles(text) {
+    const matches = String(text || '').match(/@[A-Za-z0-9_-]+/g) || [];
+    return Array.from(new Set(matches));
+  }
+
+  function extractRowData(row) {
+    const link = row.querySelector('td.pr a[href]');
+    const url = link ? link.href : '';
+    const number = row.dataset.number || '';
+    const badges = Array.from(row.querySelectorAll('td.pr .badge')).map((b) => ({
+      text: b.textContent.trim(),
+      className: b.className,
+      title: b.getAttribute('title') || '',
+    }));
+    const titleCell = row.querySelector('td.title');
+    let title = '';
+    if (titleCell) {
+      const clone = titleCell.cloneNode(true);
+      const labelsEl = clone.querySelector('.labels');
+      if (labelsEl) {
+        labelsEl.remove();
+      }
+      title = clone.textContent.trim();
+    }
+    const labels = Array.from(row.querySelectorAll('td.title .label')).map((l) => ({
+      text: l.textContent.trim(),
+      className: l.className,
+      tooltip: l.getAttribute('title') || '',
+    }));
+    const suggested = labels.filter((l) => l.tooltip !== '').map((l) => ({
+      label: l.text,
+      lines: l.tooltip.split('\n').map((s) => s.trim()).filter(Boolean),
+      handles: extractHandles(l.tooltip),
+    }));
+    const author = (row.querySelector('td.author')?.textContent || '').trim();
+    const nextStep = (row.querySelector('td.next')?.textContent || '').trim();
+    const waitingCell = row.querySelector('td.waiting');
+    const waitingText = (waitingCell?.textContent || '').trim();
+    const waitingClass = waitingCell?.className || 'waiting';
+    const waitingReasons = (waitingCell?.getAttribute('title') || '')
+        .split('\n')
+        .map((s) => s.trim())
+        .filter(Boolean);
+    const table = row.closest('table');
+    const reviewersHeading = (table?.querySelector('thead th:nth-child(6)')?.textContent || 'Reviewers').trim();
+    const reviewers = Array.from(row.querySelectorAll('td.reviewers .reviewer')).map((r) => r.textContent.trim());
+    const activityCell = row.querySelector('td.activity');
+    const activitySummary = (activityCell?.textContent || '').trim();
+    const activityDetails = (activityCell?.getAttribute('title') || '')
+        .split('\n')
+        .map((s) => s.trim())
+        .filter(Boolean);
+    const openedDate = (row.querySelector('td.opened')?.textContent || '').trim();
+    const openedDays = row.dataset.opened || '';
+    const sectionEl = row.closest('details[data-section]');
+    const sectionH2 = sectionEl?.querySelector('summary h2');
+    let sectionTitle = sectionEl?.dataset.section || '';
+    if (sectionH2) {
+      sectionTitle = sectionH2.textContent.replace(/\s*\(\d+\)\s*$/, '').trim();
+    }
+    const allHandles = Array.from(new Set([
+      ...extractHandles(nextStep),
+      ...suggested.flatMap((s) => s.handles),
+      ...reviewers.flatMap((r) => extractHandles(r.includes('@') ? r : '@' + r.replace(/^[^\w@]+/, '').trim())),
+    ]));
+    return {
+      row,
+      number,
+      url,
+      badges,
+      isDraft: row.classList.contains('draft'),
+      isFollowUp: row.dataset.followup === 'true',
+      title,
+      labels,
+      suggested,
+      author,
+      nextStep,
+      waitingText,
+      waitingClass,
+      waitingReasons,
+      reviewersHeading,
+      reviewers,
+      activitySummary,
+      activityDetails,
+      openedDate,
+      openedDays,
+      sectionTitle,
+      allHandles,
+    };
+  }
+
+  function highlightActiveRow() {
+    const activeRow = companionQueue[companionIndex] || null;
+    for (const r of rows) {
+      r.classList.toggle('active-triage-row', r === activeRow);
+    }
+  }
+
+  function openOrFocusGitHub(url) {
+    if (!url) {
+      return;
+    }
+    const existing = openedTabsByUrl.get(url);
+    if (existing && !existing.closed) {
+      existing.focus();
+      return;
+    }
+    const win = window.open(url, 'prTriageGitHub');
+    if (win) {
+      openedTabsByUrl.set(url, win);
+      win.focus();
+    }
+  }
+
+  function buildCompanionHtml(inPip) {
+    if (companionQueue.length === 0) {
+      return `<div class="companion-card"><div class="empty">No visible items to triage.</div></div>`;
+    }
+    if (companionIndex >= companionQueue.length) {
+      companionIndex = 0;
+    }
+    const item = extractRowData(companionQueue[companionIndex]);
+    const queueHeading = companionQueueLabel || item.sectionTitle || 'Queue';
+    const posText = `${escapeHtml(queueHeading)} · ${companionIndex + 1} of ${companionQueue.length}`;
+    const badgesHtml = [
+      ...item.badges.map(
+        (b) => `<span class="${escapeHtml(b.className)}" title="${escapeHtml(b.title)}">${escapeHtml(b.text)}</span>`
+      ),
+      item.isDraft ? '<span class="label">DRAFT</span>' : '',
+    ].join(' ');
+    const pillsHtml = companionQueue.map((r, idx) => {
+      const num = r.dataset.number || '';
+      const activeClass = idx === companionIndex ? ' active' : '';
+      const followUpAttr = r.dataset.followup === 'true' ? ' data-followup="true"' : '';
+      return `<button type="button" class="queue-pill${activeClass}"${followUpAttr} data-queue-index="${idx}">#${escapeHtml(num)}</button>`;
+    }).join('');
+    const reasonsHtml = item.waitingReasons.length > 0
+        ? `<ul class="companion-list">${item.waitingReasons.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}</ul>`
+        : '';
+    const suggestedHtml = item.suggested.length > 0
+        ? `<div class="companion-box full">
+            <h3>Suggested Reviewers (from SUGGESTED_REVIEWERS.md)</h3>
+            ${item.suggested.map((s) => `<ul class="companion-list">${s.lines.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}</ul>`).join('')}
+            ${item.suggested.some((s) => s.handles.length > 0)
+                ? `<div class="copy-handles">${Array.from(new Set(item.suggested.flatMap((s) => s.handles))).map((h) => `<button type="button" class="copy-handle" data-copy="${escapeHtml(h)}" title="Copy ${escapeHtml(h)}">📋 ${escapeHtml(h)}</button>`).join('')}</div>`
+                : ''}
+          </div>`
+        : '';
+    const reviewersContent = item.reviewers.length > 0
+        ? item.reviewers.map((r) => `<span class="reviewer">${escapeHtml(r)}</span>`).join(' ')
+        : '<span class="meta">None</span>';
+    const labelsContent = item.labels.length > 0
+        ? `<div class="labels">${item.labels.map((l) => `<span class="${escapeHtml(l.className)}">${escapeHtml(l.text)}</span>`).join('')}</div>`
+        : '';
+    const activityLinesHtml = item.activityDetails.length > 0
+        ? `<ul class="companion-list">${item.activityDetails.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}</ul>`
+        : `<div class="meta">${escapeHtml(item.activitySummary)}</div>`;
+    const popOutBtnHtml = !inPip
+        ? `<button type="button" class="companion-btn primary" data-action="popout" title="Float this bar on top of Chrome while browsing GitHub">🪟 Float on top</button>
+           <button type="button" class="companion-btn" data-action="close-dock" title="Hide panel">✕</button>`
+        : '';
+
+    return `<div class="companion-card">
+      <div class="companion-topbar">
+        <span class="companion-section-meta">${posText}</span>
+        <div class="companion-nav">
+          <label class="companion-auto-label" title="Automatically open or focus the GitHub tab when stepping with Prev/Next or clicking a #number pill">
+            <input type="checkbox" data-action="toggle-auto-open"${companionAutoOpen ? ' checked' : ''}>
+            <span>Auto-open GitHub</span>
+          </label>
+          <button type="button" class="companion-btn" data-action="prev"${companionQueue.length <= 1 ? ' disabled' : ''}>◀ Prev</button>
+          <button type="button" class="companion-btn" data-action="next"${companionQueue.length <= 1 ? ' disabled' : ''}>Next ▶</button>
+          ${popOutBtnHtml}
+        </div>
+      </div>
+      <div class="companion-queue" role="tablist" aria-label="Triage queue">${pillsHtml}</div>
+      <div class="companion-title-row">
+        <div>
+          <p class="companion-heading"><span class="pr-num">#${escapeHtml(item.number)}</span>${escapeHtml(item.title)} ${badgesHtml}</p>
+          ${labelsContent}
+        </div>
+        <button type="button" class="companion-btn primary" data-action="open-github">Open #${escapeHtml(item.number)} on GitHub ↗</button>
+      </div>
+      <div class="companion-grid">
+        <div class="companion-box">
+          <h3>Next Step &amp; Waiting</h3>
+          <div class="companion-next">${escapeHtml(item.nextStep)}</div>
+          <div><span class="${escapeHtml(item.waitingClass)}">${escapeHtml(item.waitingText)}</span></div>
+          ${reasonsHtml}
+        </div>
+        <div class="companion-box">
+          <h3>Author &amp; ${escapeHtml(item.reviewersHeading)}</h3>
+          <div><strong>Author:</strong> ${escapeHtml(item.author)}</div>
+          <div style="margin-top:4px;"><strong>${escapeHtml(item.reviewersHeading)}:</strong> ${reviewersContent}</div>
+          ${item.allHandles.length > 0
+              ? `<div class="copy-handles">${item.allHandles.map((h) => `<button type="button" class="copy-handle" data-copy="${escapeHtml(h)}" title="Copy ${escapeHtml(h)}">📋 ${escapeHtml(h)}</button>`).join('')}</div>`
+              : ''}
+        </div>
+        ${suggestedHtml}
+        <div class="companion-box full">
+          <h3>Activity &amp; Timeline (Opened ${escapeHtml(item.openedDate)}${item.openedDays ? `, ${escapeHtml(item.openedDays)}d ago` : ''})</h3>
+          ${activityLinesHtml}
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function bindCompanionEvents(rootEl, targetWindow) {
+    rootEl.addEventListener('click', async (e) => {
+      const copyBtn = e.target.closest('[data-copy]');
+      if (copyBtn) {
+        const handle = copyBtn.getAttribute('data-copy') || '';
+        try {
+          await targetWindow.navigator.clipboard.writeText(handle);
+          const original = copyBtn.textContent;
+          copyBtn.textContent = `✓ Copied ${handle}`;
+          setTimeout(() => {
+            copyBtn.textContent = original;
+          }, 1400);
+        } catch (err) {
+          // Clipboard fallback
+        }
+        return;
+      }
+      const pillBtn = e.target.closest('[data-queue-index]');
+      if (pillBtn) {
+        const idx = Number(pillBtn.getAttribute('data-queue-index') || '0');
+        if (idx >= 0 && idx < companionQueue.length) {
+          companionIndex = idx;
+          renderCompanion();
+          if (companionAutoOpen) {
+            const item = extractRowData(companionQueue[companionIndex]);
+            openOrFocusGitHub(item.url);
+          }
+        }
+        return;
+      }
+      const actionEl = e.target.closest('[data-action]');
+      if (!actionEl) {
+        return;
+      }
+      const action = actionEl.getAttribute('data-action');
+      if (action === 'prev' && companionQueue.length > 0) {
+        companionIndex = (companionIndex - 1 + companionQueue.length) % companionQueue.length;
+        renderCompanion();
+        if (companionAutoOpen) {
+          const item = extractRowData(companionQueue[companionIndex]);
+          openOrFocusGitHub(item.url);
+        }
+      } else if (action === 'next' && companionQueue.length > 0) {
+        companionIndex = (companionIndex + 1) % companionQueue.length;
+        renderCompanion();
+        if (companionAutoOpen) {
+          const item = extractRowData(companionQueue[companionIndex]);
+          openOrFocusGitHub(item.url);
+        }
+      } else if (action === 'open-github' && companionQueue.length > 0) {
+        const item = extractRowData(companionQueue[companionIndex]);
+        openOrFocusGitHub(item.url);
+      } else if (action === 'popout') {
+        await openPipCompanion();
+      } else if (action === 'close-dock') {
+        if (companionDock) {
+          companionDock.hidden = true;
+        }
+      }
+    });
+    rootEl.addEventListener('change', (e) => {
+      const toggle = e.target.closest('[data-action="toggle-auto-open"]');
+      if (toggle) {
+        companionAutoOpen = toggle.checked;
+        try {
+          localStorage.setItem(companionAutoOpenStorageKey, String(companionAutoOpen));
+        } catch (err) {
+          // Ignore storage errors.
+        }
+        renderCompanion();
+      }
+    });
+  }
+
+  function renderCompanion() {
+    highlightActiveRow();
+    const activePillSelector = `.queue-pill[data-queue-index="${companionIndex}"]`;
+    if (pipWindow && !pipWindow.closed) {
+      const root = pipWindow.document.getElementById('pip-companion-root');
+      if (root) {
+        root.innerHTML = buildCompanionHtml(true);
+        root.querySelector(activePillSelector)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      }
+      if (companionDock) {
+        companionDock.hidden = true;
+      }
+      return;
+    }
+    if (companionDock && companionQueue.length > 0) {
+      companionDock.innerHTML = buildCompanionHtml(false);
+      companionDock.querySelector(activePillSelector)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
+  }
+
+  async function openPipCompanion() {
+    if (companionQueue.length === 0) {
+      const visible = rows.filter((r) => !r.hidden);
+      companionQueue = visible;
+      companionIndex = 0;
+      companionQueueLabel = '';
+    }
+    if (pipWindow && !pipWindow.closed) {
+      renderCompanion();
+      pipWindow.focus();
+      return;
+    }
+    if ('documentPictureInPicture' in window) {
+      try {
+        pipWindow = await window.documentPictureInPicture.requestWindow({
+          width: 560,
+          height: 410,
+        });
+        pipWindow.document.title = 'Triage Companion';
+        const styleEl = pipWindow.document.createElement('style');
+        styleEl.textContent = Array.from(document.querySelectorAll('style'))
+            .map((s) => s.textContent)
+            .join('\n');
+        pipWindow.document.head.appendChild(styleEl);
+        pipWindow.document.body.className = 'pip-companion-body';
+        const root = pipWindow.document.createElement('div');
+        root.id = 'pip-companion-root';
+        pipWindow.document.body.appendChild(root);
+        bindCompanionEvents(root, pipWindow);
+        pipWindow.addEventListener('keydown', (e) => {
+          if (e.key === 'ArrowLeft' || e.key === '[') {
+            e.preventDefault();
+            if (companionQueue.length > 0) {
+              companionIndex = (companionIndex - 1 + companionQueue.length) % companionQueue.length;
+              renderCompanion();
+              if (companionAutoOpen) {
+                openOrFocusGitHub(extractRowData(companionQueue[companionIndex]).url);
+              }
+            }
+          } else if (e.key === 'ArrowRight' || e.key === ']') {
+            e.preventDefault();
+            if (companionQueue.length > 0) {
+              companionIndex = (companionIndex + 1) % companionQueue.length;
+              renderCompanion();
+              if (companionAutoOpen) {
+                openOrFocusGitHub(extractRowData(companionQueue[companionIndex]).url);
+              }
+            }
+          }
+        });
+        pipWindow.addEventListener('pagehide', () => {
+          pipWindow = null;
+          if (companionDock && companionQueue.length > 0) {
+            companionDock.hidden = false;
+            renderCompanion();
+          }
+        });
+        renderCompanion();
+        return;
+      } catch (err) {
+        pipWindow = null;
+      }
+    }
+    if (companionDock) {
+      companionDock.hidden = false;
+      renderCompanion();
+    }
+  }
+
+  function selectRowInCompanion(row, shouldOpenPip) {
+    const sectionEl = row.closest('details[data-section]');
+    const sectionRows = sectionEl
+        ? Array.from(sectionEl.querySelectorAll('tbody tr[data-number]:not([hidden])'))
+        : rows.filter((r) => !r.hidden);
+    if (!companionQueue.includes(row)) {
+      companionQueue = sectionRows.length > 0 ? sectionRows : [row];
+      companionQueueLabel = '';
+    }
+    companionIndex = Math.max(0, companionQueue.indexOf(row));
+    if (shouldOpenPip) {
+      openPipCompanion();
+    } else {
+      if (companionDock && !(pipWindow && !pipWindow.closed)) {
+        companionDock.hidden = false;
+      }
+      renderCompanion();
+    }
+  }
+
+  if (companionDock) {
+    bindCompanionEvents(companionDock, window);
+  }
+  if (openCompanionButton) {
+    openCompanionButton.addEventListener('click', () => {
+      if (companionQueue.length === 0) {
+        companionQueue = rows.filter((r) => !r.hidden);
+        companionIndex = 0;
+        companionQueueLabel = '';
+      }
+      openPipCompanion();
+    });
+  }
+  for (const row of rows) {
+    row.addEventListener('click', (e) => {
+      const link = e.target.closest('a[href]');
+      if (link) {
+        selectRowInCompanion(row, false);
+        return;
+      }
+      selectRowInCompanion(row, true);
+    });
   }
 
   function hiddenByLabel(row) {
@@ -1305,6 +2014,10 @@ const String _script = r'''
     } catch (e) {
       // Not saved, but the checkboxes still work on this page.
     }
+  }
+
+  function visibleRows(sectionEl) {
+    return Array.from(sectionEl.querySelectorAll('tbody tr[data-number]:not([hidden])'));
   }
 
   function visibleLinks(sectionEl) {
@@ -1361,6 +2074,9 @@ const String _script = r'''
     if (hideWaitingCheckbox) {
       hideWaitingCheckbox.checked = hideWaitingResponse;
     }
+    if (openCompanionButton) {
+      openCompanionButton.disabled = rows.every((r) => r.hidden);
+    }
   }
 
   for (const sectionEl of sections) {
@@ -1370,6 +2086,7 @@ const String _script = r'''
       batchBtn.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
+        const sectionRows = visibleRows(sectionEl);
         const links = visibleLinks(sectionEl);
         if (links.length === 0) {
           return;
@@ -1378,8 +2095,23 @@ const String _script = r'''
         if (offset >= links.length) {
           offset = 0;
         }
+        const batchRows = sectionRows.slice(offset, offset + 10);
         for (const url of links.slice(offset, offset + 10)) {
-          window.open(url, '_blank', 'noopener');
+          const win = window.open(url, '_blank');
+          if (win) {
+            openedTabsByUrl.set(url, win);
+          }
+        }
+        if (batchRows.length > 0) {
+          companionQueue = batchRows;
+          companionIndex = 0;
+          const h2 = sectionEl.querySelector('summary h2');
+          const secTitle = h2 ? h2.textContent.replace(/\s*\(\d+\)\s*$/, '').trim() : '';
+          companionQueueLabel = `${secTitle} (${offset + 1}–${offset + batchRows.length})`;
+          if (companionDock && !(pipWindow && !pipWindow.closed)) {
+            companionDock.hidden = false;
+          }
+          renderCompanion();
         }
         const nextOffset = offset + 10;
         sectionEl.dataset.batchOffset = nextOffset < links.length ? String(nextOffset) : '0';
@@ -1390,8 +2122,21 @@ const String _script = r'''
       allBtn.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
+        const sectionRows = visibleRows(sectionEl);
         for (const url of visibleLinks(sectionEl)) {
-          window.open(url, '_blank', 'noopener');
+          const win = window.open(url, '_blank');
+          if (win) {
+            openedTabsByUrl.set(url, win);
+          }
+        }
+        if (sectionRows.length > 0) {
+          companionQueue = sectionRows;
+          companionIndex = 0;
+          companionQueueLabel = '';
+          if (companionDock && !(pipWindow && !pipWindow.closed)) {
+            companionDock.hidden = false;
+          }
+          renderCompanion();
         }
       });
     }

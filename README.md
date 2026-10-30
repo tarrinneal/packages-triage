@@ -12,43 +12,69 @@ button, rate-limited to once every 5 minutes) and publishes it to GitHub Pages.
 To enable it on a standalone repository:
 1. Go to **Settings → Pages**.
 2. Under **Build and deployment**, set **Source** to **GitHub Actions**.
+3. *(Optional, for other repositories)* Edit [`triage.yaml`](triage.yaml) (or set `TRIAGE_REPOS` in **Settings → Secrets and variables → Actions → Variables**) to configure repositories and labels.
 
 Once enabled, the report will be published at:
 - `https://<owner>.github.io/<repo>/` (Community PRs)
 - `https://<owner>.github.io/<repo>/index_team.html` (Team PRs)
-- `https://<owner>.github.io/<repo>/index_issues.html` (Package Issues from `flutter/flutter`)
+- `https://<owner>.github.io/<repo>/index_issues.html` (Actionable Issues)
+
+## Configuration (`triage.yaml`)
+
+By default, the tool reads [`triage.yaml`](triage.yaml) next to `pubspec.yaml` (or a custom file
+passed with `--config <file>` / `-c <file>`). Every field is optional and defaults to the Flutter
+Ecosystem triage settings when omitted:
+
+- `repos`: PR repositories to inspect (`flutter/packages` and `flutter/core-packages` by default).
+- `issues_repo`: Repository where issues are tracked (`flutter/flutter` by default; set to `null` or `""` to use the first PR repository).
+- `workflow_repo`: Repository hosting the GitHub Actions refresh workflow (`tarrinneal/packages-triage` by default).
+- `roster_file`: Markdown file in the PR repository listing team reviewers (`SUGGESTED_REVIEWERS.md` by default; falls back to `CODEOWNERS`).
+- `bot_accounts`: Logins treated as bots in addition to `[bot]` accounts.
+- `required_approvals`: Number of approvals a community PR needs before it is no longer missing a reviewer (`2` by default).
+- `hidden_labels`: PR labels hidden by default unless `--show-hidden` or the UI toggle is used (`triage-design` by default).
+- `non_hidden_filter_label`: Label that keeps a PR visible even when it also has a hidden label (`triage-packages` by default).
+- `routing_label_prefixes` / `package_label_prefix` / `show_all_labels`: Label prefixes shown as badges on PR and issue rows (`p: `, `platform-`, `triage-` by default).
+- `waiting_for_response_labels`: Labels indicating an issue is waiting on the author (`waiting for response`, `waiting for customer response`).
+- `issue_team_label`, `issue_fyi_label`, `issue_triaged_label`: Issue triage labels (`team-ecosystem`, `fyi-ecosystem`, `triaged-ecosystem` by default).
+- `priority_labels` / `high_priority_labels`: Issue priority labels (`P0`–`P3` and `P0`–`P1` by default).
 
 ## Running it locally
 
-Put a GitHub token in `.env` next to `pubspec.yaml` (which is gitignored), so that it has a line
-like this:
+The tool looks for a GitHub token in this order:
+1. The `GITHUB_TOKEN` (or `GH_TOKEN`) environment variable.
+2. A `GITHUB_TOKEN=github_pat_YOUR_TOKEN` line in `./.env` (current directory), the `.env` next to `pubspec.yaml`, or `~/.config/pr_inspector/.env`.
+3. The GitHub CLI (`gh auth token`), if you are logged in with `gh auth login`.
 
-```
-GITHUB_TOKEN=github_pat_YOUR_TOKEN
-```
+A fine-grained token with read-only access to public repositories is enough.
 
-A fine-grained token with read-only access to public repositories is enough. A `GITHUB_TOKEN`
-environment variable, if set, takes precedence over the file.
-
-Then run the tool with an output file. By default it inspects both `flutter/packages` and
-`flutter/core-packages`; pass one or more `owner/repo` arguments to override.
+Then run the tool with an output file. By default it inspects the repositories in `triage.yaml`
+(`flutter/packages` and `flutter/core-packages`); pass `--config <file>` or one or more
+`owner/repo` arguments to inspect any GitHub repository:
 
 ```sh
 dart run bin/pr_inspector.dart --html /tmp/triage.html --open
+dart run bin/pr_inspector.dart --config my_triage.yaml --html /tmp/triage.html --open
+dart run bin/pr_inspector.dart owner/repo --html /tmp/triage.html --open
 ```
 
 Or install it globally as a command-line tool:
 
 ```sh
 dart pub global activate -s git https://github.com/<owner>/<repo>.git
-GITHUB_TOKEN=github_pat_YOUR_TOKEN pr_inspector --html /tmp/triage.html --open
+pr_inspector owner/repo --html /tmp/triage.html --open
 ```
+
+When inspecting non-`flutter/*` repositories without a custom config file, the tool automatically:
+- Requires 1 approval instead of 2 for community PRs (override with `--required-approvals <n>`).
+- Displays all PR and issue labels on rows (instead of only Flutter routing labels).
+- Falls back to `.github/CODEOWNERS` / `CODEOWNERS` when `SUGGESTED_REVIEWERS.md` is not present.
+- Triages open issues generically when `--team-label` is not set.
 
 This writes three linked pages:
 
 - `/tmp/triage.html`: PRs from community members and bots.
 - `/tmp/triage_team.html`: PRs from team members.
-- `/tmp/triage_issues.html`: Actionable package issues (`team-ecosystem` and `fyi-ecosystem` issues from `flutter/flutter`). Pass `--no-issues` to skip fetching issues.
+- `/tmp/triage_issues.html`: Actionable issues (`team-ecosystem` and `fyi-ecosystem` issues from `flutter/flutter` by default, or open untriaged/follow-up issues on other repositories). Pass `--no-issues` to skip fetching issues.
 
 Without `--html`, the same report is printed as text.
 

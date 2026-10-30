@@ -16,7 +16,7 @@ import 'package:pr_inspector/triage.dart';
 import 'package:pr_inspector/types.dart';
 import 'package:pr_inspector/utils.dart';
 
-const List<String> _defaultRepos = <String>['flutter/packages', 'flutter/core-packages'];
+const List<String> _defaultRepos = defaultRepos;
 
 /// Thrown for invalid command-line usage.
 class _UsageException implements Exception {
@@ -27,6 +27,11 @@ class _UsageException implements Exception {
 
 Future<void> main(List<String> arguments) async {
   final parser = ArgParser()
+    ..addOption(
+      'config',
+      abbr: 'c',
+      help: 'Read repository and label settings from <file> (defaults to triage.yaml if present).',
+    )
     ..addOption('pr', abbr: 'p', help: 'Explain how a single PR is triaged, and why.')
     ..addOption(
       'html',
@@ -38,7 +43,38 @@ Future<void> main(List<String> arguments) async {
     ..addFlag(
       'issues',
       defaultsTo: true,
-      help: 'Also fetch and triage package issues (from flutter/flutter for flutter/packages).',
+      help: 'Also fetch and triage issues (from flutter/flutter for flutter/packages).',
+    )
+    ..addOption(
+      'required-approvals',
+      help:
+          'Number of approvals a community PR needs before it is no longer '
+          'missing a reviewer (defaults to 2 for flutter/* repos, 1 otherwise).',
+    )
+    ..addFlag(
+      'all-labels',
+      negatable: false,
+      help:
+          'Show all PR and issue labels on report rows (automatic for non-flutter/* '
+          'repositories).',
+    )
+    ..addOption(
+      'team-label',
+      help: 'Issue label for the team rotation (defaults to team-ecosystem on flutter/flutter).',
+    )
+    ..addOption(
+      'fyi-label',
+      help: 'Secondary FYI issue label (defaults to fyi-ecosystem on flutter/flutter).',
+    )
+    ..addOption(
+      'triaged-label',
+      help: 'Label marking an issue as triaged (defaults to triaged-ecosystem on flutter/flutter).',
+    )
+    ..addOption(
+      'workflow-repo',
+      help:
+          'GitHub owner/repo hosting the refresh workflow (defaults to '
+          'GITHUB_REPOSITORY or tarrinneal/packages-triage).',
     )
     ..addFlag(
       'show-hidden',
@@ -66,15 +102,18 @@ Future<void> main(List<String> arguments) async {
     )
     ..addFlag('help', abbr: 'h', negatable: false, help: 'Show this help.');
   final File envFile = envFileFor(Platform.script);
+  final List<File> envFiles = candidateEnvFiles(Platform.script);
   final usage =
       '''
 Usage: dart run bin/pr_inspector.dart [<owner>/<repo> ...] [options]
 
-Sorts the open PRs in one or more repositories (${_defaultRepos.join(' and ')} by default)
-by who needs to act next and how long they have been waiting.
+Sorts the open PRs in one or more repositories (${_defaultRepos.join(' and ')} by default,
+or the repositories in triage.yaml / TRIAGE_REPOS) by who needs to act next and how long
+they have been waiting.
 
-Reads a GitHub token from the $tokenVariable environment variable if it is set, and
-otherwise from a "$tokenVariable=<token>" line in ${envFile.path}.
+Reads a GitHub token from the $tokenVariable (or $ghTokenVariable) environment variable,
+from a "$tokenVariable=<token>" line in .env (${envFile.path} or ~/.config/pr_inspector/.env),
+or from the GitHub CLI ("gh auth token").
 
 Saves each PR's comments and reviews so that later runs only fetch PRs that have
 changed, and removes them once a PR hasn't been seen open for ${DetailCache.maxUnseen.inDays} days. They are
@@ -83,7 +122,7 @@ saved in ${cacheDirectory().path}.
 ${parser.usage}''';
 
   try {
-    await _run(parser.parse(arguments), usage, envFile);
+    await _run(parser.parse(arguments), usage, envFile, envFiles);
   } on ArgParserException catch (e) {
     stderr
       ..writeln(e.message)
@@ -102,29 +141,119 @@ ${parser.usage}''';
   }
 }
 
-Future<void> _run(ArgResults results, String usage, File envFile) async {
+List<String> _parseRepoList(String raw) => raw
+    .split(RegExp(r'[\s,]+'))
+    .map((String s) => s.trim())
+    .where((String s) => s.isNotEmpty)
+    .toList();
+
+TriageConfig _loadConfig(ArgResults results) {
+  final String? configPath = results.option('config');
+  if (configPath != null) {
+    final file = File(configPath);
+    if (!file.existsSync()) {
+      throw _UsageException('Config file $configPath does not exist.');
+    }
+    try {
+      return TriageConfig.fromFile(file);
+    } on FormatException catch (e) {
+      throw _UsageException('Invalid config file $configPath: ${e.message}');
+    }
+  }
+  final File defaultFile = configFileFor(Platform.script);
+  if (defaultFile.existsSync()) {
+    try {
+      return TriageConfig.fromFile(defaultFile);
+    } on FormatException catch (e) {
+      throw _UsageException('Invalid config file ${defaultFile.path}: ${e.message}');
+    }
+  }
+  return const TriageConfig();
+}
+
+Future<void> _run(ArgResults results, String usage, File envFile, List<File> envFiles) async {
   if (results.flag('help')) {
     stdout.writeln(usage);
     return;
   }
+  final TriageConfig config = _loadConfig(results);
+  final hasExplicitConfig = results.option('config') != null;
   final int? prNumber = _positiveInt(results, 'pr');
   if (prNumber != null && results.rest.length > 1) {
     throw _UsageException('Provide at most one repository when using --pr.');
   }
+  final String? configuredReposRaw = readConfigValue(
+    environment: Platform.environment,
+    envFiles: envFiles,
+    key: 'TRIAGE_REPOS',
+  );
+  final List<String> configuredRepos = configuredReposRaw == null
+      ? const <String>[]
+      : _parseRepoList(configuredReposRaw);
+  final List<String> fallbackRepos = configuredRepos.isNotEmpty ? configuredRepos : config.repos;
   final List<String> repos = results.rest.isNotEmpty
       ? results.rest
-      : (prNumber != null ? <String>[_defaultRepos.first] : _defaultRepos);
+      : (prNumber != null ? <String>[fallbackRepos.first] : fallbackRepos);
   for (final repo in repos) {
     if (!RegExp(r'^[\w.-]+/[\w.-]+$').hasMatch(repo)) {
       throw _UsageException('"$repo" is not a repository in owner/repo form.');
     }
   }
+  final bool usesConfiguredRepos =
+      hasExplicitConfig ||
+      repos.every((String r) => r.startsWith('flutter/') || config.repos.contains(r));
+  final String? envApprovals = readConfigValue(
+    environment: Platform.environment,
+    envFiles: envFiles,
+    key: 'TRIAGE_REQUIRED_APPROVALS',
+  );
+  final int requiredApprovals =
+      _positiveInt(results, 'required-approvals') ??
+      (envApprovals != null ? int.tryParse(envApprovals) : null) ??
+      (usesConfiguredRepos ? config.requiredApprovals : 1);
+  final bool showAllLabels =
+      results.flag('all-labels') || config.showAllLabels || !usesConfiguredRepos;
+  final Set<String> hiddenLabels = usesConfiguredRepos ? config.hiddenLabels : const <String>{};
   final int? limit = _positiveInt(results, 'limit');
   final String? htmlPath = results.option('html');
   final String? recordPath = results.option('record');
   final String? replayPath = results.option('replay');
   final bool showHidden = results.flag('show-hidden');
   final bool includeIssues = results.flag('issues');
+  final String? teamLabelOption =
+      results.option('team-label') ??
+      readConfigValue(
+        environment: Platform.environment,
+        envFiles: envFiles,
+        key: 'TRIAGE_TEAM_LABEL',
+      );
+  final String? fyiLabelOption =
+      results.option('fyi-label') ??
+      readConfigValue(
+        environment: Platform.environment,
+        envFiles: envFiles,
+        key: 'TRIAGE_FYI_LABEL',
+      );
+  final String? triagedLabelOption =
+      results.option('triaged-label') ??
+      readConfigValue(
+        environment: Platform.environment,
+        envFiles: envFiles,
+        key: 'TRIAGE_TRIAGED_LABEL',
+      );
+  final String workflowRepo =
+      results.option('workflow-repo') ??
+      readConfigValue(
+        environment: Platform.environment,
+        envFiles: envFiles,
+        key: 'TRIAGE_WORKFLOW_REPO',
+      ) ??
+      readConfigValue(
+        environment: Platform.environment,
+        envFiles: envFiles,
+        key: 'GITHUB_REPOSITORY',
+      ) ??
+      config.workflowRepo;
   if (results.flag('open') && htmlPath == null) {
     throw _UsageException('--open requires --html.');
   }
@@ -137,15 +266,20 @@ Future<void> _run(ArgResults results, String usage, File envFile) async {
 
   // Replays never contact GitHub, so they don't need a token.
   final GitHubToken? token = replayPath == null
-      ? findToken(environment: Platform.environment, envFile: envFile)
+      ? findToken(
+          environment: Platform.environment,
+          envFile: envFile,
+          additionalEnvFiles: envFiles,
+          ghCliToken: readGhCliToken,
+        )
       : null;
   if (replayPath == null && token == null) {
     if (prNumber == null && limit == null) {
       throw _UsageException(
-        'No GitHub token found. Add a "$tokenVariable=<token>" line to ${envFile.path}, or set '
-        'the $tokenVariable environment variable. Without a token, GitHub allows 60 requests '
-        'per hour, which is not enough for a full report; use --pr or --limit for a small '
-        'anonymous run.',
+        'No GitHub token found. Add a "$tokenVariable=<token>" line to ${envFile.path}, '
+        'set the $tokenVariable environment variable, or authenticate with "gh auth login". '
+        'Without a token, GitHub allows 60 requests per hour, which is not enough for a full '
+        'report; use --pr or --limit for a small anonymous run.',
       );
     }
     _warn('No GitHub token found in ${envFile.path}; using the anonymous rate limit.');
@@ -158,7 +292,13 @@ Future<void> _run(ArgResults results, String usage, File envFile) async {
   final stopwatch = Stopwatch()..start();
   try {
     if (prNumber != null) {
-      await _explainPR(client, repos.first, prNumber);
+      await _explainPR(
+        client,
+        repos.first,
+        prNumber,
+        requiredApprovals: requiredApprovals,
+        config: config,
+      );
     } else {
       final bool refresh = results.flag('refresh') || recordPath != null;
       await _report(
@@ -168,7 +308,16 @@ Future<void> _run(ArgResults results, String usage, File envFile) async {
         htmlFile: htmlPath == null ? null : File(htmlPath),
         open: results.flag('open'),
         showHidden: showHidden,
+        hiddenLabels: hiddenLabels,
+        showAllLabels: showAllLabels,
+        requiredApprovals: requiredApprovals,
         includeIssues: includeIssues,
+        teamLabelOption: teamLabelOption,
+        fyiLabelOption: fyiLabelOption,
+        triagedLabelOption: triagedLabelOption,
+        workflowRepo: workflowRepo,
+        usesConfiguredRepos: usesConfiguredRepos,
+        config: config,
         live: replayPath == null,
         refresh: refresh,
       );
@@ -213,14 +362,33 @@ int? _positiveInt(ArgResults results, String name) {
 
 void _warn(String message) => stderr.writeln('Warning: $message');
 
-Future<void> _explainPR(GitHubClient client, String repo, int number) async {
+Future<void> _explainPR(
+  GitHubClient client,
+  String repo,
+  int number, {
+  required int requiredApprovals,
+  required TriageConfig config,
+}) async {
   stderr.writeln('Fetching PR #$number in $repo...');
   final Map<String, dynamic> listing = await fetchSinglePR(client, repo, number);
-  final Set<String> roster = await fetchRoster(client, repo, <Map<String, dynamic>>[
+  final Set<String> roster = await fetchRoster(
+    client,
+    repo,
+    <Map<String, dynamic>>[listing],
+    onWarning: _warn,
+    config: config,
+  );
+  final PRInfo pr = await fetchPRDetails(
+    client,
+    repo,
     listing,
-  ], onWarning: _warn);
-  final PRInfo pr = await fetchPRDetails(client, repo, listing, roster, alwaysFetchDetails: true);
-  printExplanation(analyzePR(pr, now: client.now));
+    roster,
+    alwaysFetchDetails: true,
+    config: config,
+  );
+  printExplanation(
+    analyzePR(pr, now: client.now, requiredApprovals: requiredApprovals, config: config),
+  );
 }
 
 Future<void> _report(
@@ -230,7 +398,16 @@ Future<void> _report(
   required File? htmlFile,
   required bool open,
   required bool showHidden,
+  required Set<String> hiddenLabels,
+  required bool showAllLabels,
+  required int requiredApprovals,
   required bool includeIssues,
+  required String? teamLabelOption,
+  required String? fyiLabelOption,
+  required String? triagedLabelOption,
+  required String workflowRepo,
+  required bool usesConfiguredRepos,
+  required TriageConfig config,
   required bool live,
   required bool refresh,
 }) async {
@@ -257,6 +434,7 @@ Future<void> _report(
           listing,
           suggestedReviewers: suggestedReviewers,
           onWarning: _warn,
+          config: config,
         ),
       );
     } on GitHubException catch (e) {
@@ -289,6 +467,7 @@ Future<void> _report(
       listing,
       roster,
       cache: cache,
+      config: config,
       onProgress: (int done, int total, PRInfo pr) {
         if (interactive) {
           stderr.write('\r[$done/$total] $repo#${pr.number}   ');
@@ -306,10 +485,25 @@ Future<void> _report(
     allPRs.addAll(prs);
   }
 
-  final analyses = <PRAnalysis>[for (final PRInfo pr in allPRs) analyzePR(pr, now: now)]
-    ..sort(comparePRs);
+  final analyses = <PRAnalysis>[
+    for (final PRInfo pr in allPRs)
+      analyzePR(pr, now: now, requiredApprovals: requiredApprovals, config: config),
+  ]..sort(comparePRs);
 
-  final String issuesRepo = defaultIssuesRepoFor(repos.first);
+  final String issuesRepo = defaultIssuesRepoFor(repos.first, config: config);
+  final bool useConfigIssueLabels = usesConfiguredRepos && issuesRepo == config.issuesRepo;
+  final String? effectiveTeamLabel =
+      teamLabelOption ??
+      (useConfigIssueLabels
+          ? ((config.issueTeamLabel?.isEmpty ?? true) ? null : config.issueTeamLabel)
+          : null);
+  final String? effectiveFyiLabel =
+      fyiLabelOption ??
+      (useConfigIssueLabels
+          ? ((config.issueFyiLabel?.isEmpty ?? true) ? null : config.issueFyiLabel)
+          : null);
+  final String effectiveTriagedLabel =
+      triagedLabelOption ?? (useConfigIssueLabels ? config.issueTriagedLabel : 'triaged');
   final DetailCache? issuesCache = !live || !includeIssues
       ? null
       : DetailCache.load(
@@ -328,6 +522,10 @@ Future<void> _report(
         issuesRepo,
         now: now,
         limit: limit,
+        teamLabel: effectiveTeamLabel,
+        fyiLabel: effectiveFyiLabel,
+        triagedLabel: effectiveTriagedLabel,
+        config: config,
       );
       stderr.writeln('Found ${issueListings.length} candidate package issues.');
       final List<IssueInfo> issues = await fetchAllIssueDetails(
@@ -336,6 +534,7 @@ Future<void> _report(
         issueListings,
         roster,
         cache: issuesCache,
+        config: config,
         onProgress: (int done, int total, IssueInfo issue) {
           if (interactive) {
             stderr.write('\r[$done/$total] issue #${issue.number}   ');
@@ -351,7 +550,14 @@ Future<void> _report(
         _saveCache(issuesCache, issues.map((IssueInfo i) => i.number), label: 'issues');
       }
       for (final issue in issues) {
-        final IssueAnalysis? analysis = analyzeIssue(issue, now: now);
+        final IssueAnalysis? analysis = analyzeIssue(
+          issue,
+          now: now,
+          teamLabel: effectiveTeamLabel ?? '',
+          fyiLabel: effectiveFyiLabel ?? '',
+          triagedLabel: effectiveTriagedLabel,
+          config: config,
+        );
         if (analysis != null) {
           issueAnalyses.add(analysis);
         }
@@ -373,7 +579,9 @@ Future<void> _report(
       analyses,
       issues: issueAnalyses,
       issuesRepo: issuesRepo,
+      hiddenLabels: hiddenLabels,
       showHidden: showHidden,
+      config: config,
     );
   } else {
     final File stateFile = stateFileFor(htmlFile);
@@ -389,7 +597,13 @@ Future<void> _report(
       generatedAt: now,
       previous: previous,
       suggestedReviewers: suggestedReviewers,
+      hiddenLabels: hiddenLabels,
       showHiddenByDefault: showHidden,
+      showAllLabels: showAllLabels,
+      workflowRepo: workflowRepo,
+      teamLabel: effectiveTeamLabel,
+      fyiLabel: effectiveFyiLabel,
+      config: config,
       note: <String>[
         if (limit != null) 'Partial report: only the $limit newest open PRs were analyzed.',
         if (!live) 'Replayed from a recording made ${formatAsMinute(now)}.',
@@ -407,7 +621,14 @@ Future<void> _report(
       await _openInBrowser(htmlFile);
     }
   }
-  _printSummary(analyses, issueAnalyses, roster: roster, showHidden: showHidden);
+  _printSummary(
+    analyses,
+    issueAnalyses,
+    roster: roster,
+    hiddenLabels: hiddenLabels,
+    showHidden: showHidden,
+    config: config,
+  );
 }
 
 /// Saves [cache] after a run that found [numbers] open, which keeps their
@@ -432,7 +653,9 @@ void _printSummary(
   List<PRAnalysis> analyses,
   List<IssueAnalysis> issueAnalyses, {
   required Set<String> roster,
+  required Set<String> hiddenLabels,
   required bool showHidden,
+  required TriageConfig config,
 }) {
   for (final ReportPage page in ReportPage.values) {
     final List<PRAnalysis> onPage = analyses.where((PRAnalysis a) => a.page == page).toList();
@@ -451,23 +674,22 @@ void _printSummary(
       for (final IssueSection section in IssueSection.values)
         if (issueAnalyses.where((IssueAnalysis a) => a.section == section).length
             case final int count when count > 0)
-          '${issueSectionTitle(section).toLowerCase()} $count',
+          '${issueSectionTitle(section, config: config).toLowerCase()} $count',
     ];
     stderr.writeln('Package Issues: ${issueAnalyses.length} (${issueCounts.join(', ')})');
   }
   final int fromRoster = analyses.where((PRAnalysis a) => a.pr.authorTypeFromRoster).length;
   if (fromRoster > 0) {
     stderr.writeln(
-      '$fromRoster team PRs were identified using SUGGESTED_REVIEWERS.md or review requests '
-      '(${roster.length} known team members), since GitHub did not report their authors as members.',
+      '$fromRoster team PRs were identified using ${config.rosterFile}, CODEOWNERS, or review '
+      'requests (${roster.length} known team members), since GitHub did not report their authors '
+      'as members.',
     );
   }
-  final int hidden = analyses
-      .where((PRAnalysis a) => hasHiddenLabel(a.pr, defaultHiddenLabels))
-      .length;
+  final int hidden = analyses.where((PRAnalysis a) => hasHiddenLabel(a.pr, hiddenLabels)).length;
   if (hidden > 0 && !showHidden) {
     stderr.writeln(
-      '$hidden of these are labeled ${defaultHiddenLabels.join(' or ')}, so they are hidden '
+      '$hidden of these are labeled ${hiddenLabels.join(' or ')}, so they are hidden '
       'by default.',
     );
   }

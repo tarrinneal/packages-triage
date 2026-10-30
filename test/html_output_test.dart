@@ -480,8 +480,7 @@ void main() {
     expect(
       community,
       contains(
-        '<input id="hide-waiting-response" type="checkbox" checked>'
-        '<span>Hide waiting-for-response (1)</span>',
+        '<input id="hide-waiting-response" type="checkbox" checked><span>Hide waiting-for-response (1)</span>',
       ),
     );
     expect(rowFor(community, 1), contains('data-waiting-response="true"'));
@@ -493,8 +492,7 @@ void main() {
     expect(
       issuesHtml,
       contains(
-        '<input id="hide-waiting-response" type="checkbox" checked>'
-        '<span>Hide waiting-for-response (1)</span>',
+        '<input id="hide-waiting-response" type="checkbox" checked><span>Hide waiting-for-response (1)</span>',
       ),
     );
     expect(rowFor(issuesHtml, 99), contains('data-waiting-response="true"'));
@@ -514,22 +512,26 @@ void main() {
     expect(
       community,
       contains(
-        '<h2>Waiting on team (<span data-count="waitingOnTeam">1</span>)</h2>'
-        '<span class="section-actions">'
-        '<button type="button" class="section-btn open-batch">Open first 10</button>'
-        '<button type="button" class="section-btn open-all">Open all</button>'
-        '</span>',
+        <String>[
+          '<h2>Waiting on team (<span data-count="waitingOnTeam">1</span>)</h2>',
+          '<span class="section-actions">',
+          '<button type="button" class="section-btn open-batch">Open first 10</button>',
+          '<button type="button" class="section-btn open-all">Open all</button>',
+          '</span>',
+        ].join(),
       ),
     );
     // needsReviewer has 0 visible PRs -> buttons disabled
     expect(
       community,
       contains(
-        '<h2>Needs reviewer (<span data-count="needsReviewer">0</span>)</h2>'
-        '<span class="section-actions">'
-        '<button type="button" class="section-btn open-batch" disabled>Open first 10</button>'
-        '<button type="button" class="section-btn open-all" disabled>Open all</button>'
-        '</span>',
+        <String>[
+          '<h2>Needs reviewer (<span data-count="needsReviewer">0</span>)</h2>',
+          '<span class="section-actions">',
+          '<button type="button" class="section-btn open-batch" disabled>Open first 10</button>',
+          '<button type="button" class="section-btn open-all" disabled>Open all</button>',
+          '</span>',
+        ].join(),
       ),
     );
     expect(community, contains("offset > 0 ? 'Open next 10' : 'Open first 10'"));
@@ -583,17 +585,21 @@ void main() {
     expect(
       rowFor(community, 1),
       contains(
-        '<span class="label" title="Suggested reviewers (camera):&#10;'
-        '• Cross-platform: @bparrishMines&#10;'
-        '• Android: @camsim99&#10;'
-        '• iOS: @hellohuanlin, @louisehsu">p: camera</span>',
+        <String>[
+          '<span class="label" title="Suggested reviewers (camera):&#10;',
+          '• Cross-platform: @bparrishMines&#10;',
+          '• Android: @camsim99&#10;',
+          '• iOS: @hellohuanlin, @louisehsu">p: camera</span>',
+        ].join(),
       ),
     );
     expect(
       rowFor(community, 1),
       contains(
-        '<span class="label" title="Suggested reviewers (go_router / go_router_builder):&#10;'
-        '• @chunhtai">p: go_router_builder</span>',
+        <String>[
+          '<span class="label" title="Suggested reviewers (go_router / go_router_builder):&#10;',
+          '• @chunhtai">p: go_router_builder</span>',
+        ].join(),
       ),
     );
     expect(rowFor(community, 1), contains('<span class="label">p: unknown</span>'));
@@ -602,11 +608,59 @@ void main() {
     expect(
       rowFor(issuesHtml, 55),
       contains(
-        '<span class="label" title="Suggested reviewers (camera):&#10;'
-        '• Cross-platform: @bparrishMines&#10;'
-        '• Android: @camsim99&#10;'
-        '• iOS: @hellohuanlin, @louisehsu">p: camera</span>',
+        <String>[
+          '<span class="label" title="Suggested reviewers (camera):&#10;',
+          '• Cross-platform: @bparrishMines&#10;',
+          '• Android: @camsim99&#10;',
+          '• iOS: @hellohuanlin, @louisehsu">p: camera</span>',
+        ].join(),
       ),
     );
+  });
+
+  test('supports showAllLabels, custom workflowRepo, and generic issue sections', () {
+    writeHtmlReport(
+      repo: 'acme/widgets',
+      prs: <PRAnalysis>[
+        _analysis(1, labels: const <String>['enhancement', 'cla: yes']),
+      ],
+      communityFile: communityFile,
+      generatedAt: _now,
+      hiddenLabels: const <String>{},
+      showAllLabels: true,
+      workflowRepo: 'acme/triage',
+      teamLabel: null,
+      fyiLabel: null,
+    );
+    final String community = communityFile.readAsStringSync();
+    expect(community, contains('data-workflow-repo="acme/triage"'));
+    expect(community, isNot(contains('id="show-non-design"')));
+    expect(rowFor(community, 1), contains('<span class="label">enhancement</span>'));
+    expect(rowFor(community, 1), isNot(contains('<span class="label">cla: yes</span>')));
+
+    final String issuesHtml = issuesPageFileFor(communityFile).readAsStringSync();
+    expect(issuesHtml, contains('<h2>Untriaged (<span data-count="untriaged">0</span>)</h2>'));
+    expect(issuesHtml, isNot(contains('id="fyiEcosystem"')));
+  });
+
+  test('renders triage companion button, dock, and Document Picture-in-Picture support', () {
+    write(<PRAnalysis>[_analysis(1)]);
+    final String community = communityFile.readAsStringSync();
+    final String team = teamPageFileFor(communityFile).readAsStringSync();
+    final String issues = issuesPageFileFor(communityFile).readAsStringSync();
+
+    for (final pageHtml in <String>[community, team, issues]) {
+      expect(pageHtml, contains('id="open-companion"'));
+      expect(pageHtml, contains('>🪟 Triage companion</button>'));
+      expect(
+        pageHtml,
+        contains(
+          '<aside id="triage-companion-dock" class="companion-dock" hidden aria-label="Triage companion"></aside>',
+        ),
+      );
+      expect(pageHtml, contains('window.documentPictureInPicture.requestWindow'));
+      expect(pageHtml, contains('Suggested Reviewers (from SUGGESTED_REVIEWERS.md)'));
+      expect(pageHtml, contains('Auto-open GitHub'));
+    }
   });
 }

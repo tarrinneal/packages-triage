@@ -1,0 +1,77 @@
+# Configuration for pr_inspector.
+#
+# All values below match the built-in defaults. Edit this file or pass
+# `--config <path>` to customize the tool for other repositories or labels.
+
+# Repositories to inspect for open PRs when none are passed on the command line.
+repos:
+  - flutter/packages
+  - flutter/core-packages
+
+# Repository where issues are tracked when inspecting the configured `repos`
+# (set to null or omit to use the first PR repository itself).
+issues_repo: flutter/flutter
+
+# Repository (`owner/repo`) that hosts `.github/workflows/deploy_pages.yml`
+# for the in-page "Refresh report" button when not hosted on `*.github.io`.
+workflow_repo: tarrinneal/packages-triage
+
+# Repository-relative path to the markdown file listing team reviewers and
+# package reviewer mappings (set to "" to disable).
+roster_file: SUGGESTED_REVIEWERS.md
+
+# Additional bot usernames that do not have GitHub user type `Bot` or end in `[bot]`.
+bot_accounts:
+  - fluttergithubbot
+  - engine-flutter-autoroll
+
+# Number of approvals a community PR needs before it is no longer flagged as
+# missing a reviewer.
+required_approvals: 2
+
+# PR labels that are hidden by default on the report (toggleable in the UI).
+hidden_labels:
+  - triage-design
+
+# Label displayed on the filter toggle chip for PRs without `hidden_labels`.
+non_hidden_filter_label: triage-packages
+
+# Label prefixes displayed as chips on PR and issue rows.
+routing_label_prefixes:
+  - "p: "
+  - platform-
+  - triage-
+
+# Label prefix used to match package labels against `roster_file` for hover tooltips.
+package_label_prefix: "p: "
+
+# Whether to display all non-CLA labels as chips on PR and issue rows.
+show_all_labels: false
+
+# Labels indicating that a PR or issue is waiting on the author's response.
+waiting_for_response_labels:
+  - waiting for response
+  - waiting-for-response
+  - waiting for customer response
+
+# Primary label identifying issues belonging to the team on the issues page
+# (set to null to query all open issues in `issues_repo`).
+issue_team_label: team-ecosystem
+
+# Secondary label identifying FYI issues on the issues page (set to null to disable).
+issue_fyi_label: fyi-ecosystem
+
+# Label indicating that an issue has been triaged by the team.
+issue_triaged_label: triaged-ecosystem
+
+# Priority labels in descending priority order.
+priority_labels:
+  - P0
+  - P1
+  - P2
+  - P3
+
+# Priority labels shown in the "High priority" issues section after triage.
+high_priority_labels:
+  - P0
+  - P1

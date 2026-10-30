@@ -464,5 +464,29 @@ void main() {
       );
       expect(p2, isNull);
     });
+
+    test('triages generic repository issues without ecosystem labels', () {
+      final IssueAnalysis? untriaged = analyzeIssue(
+        makeIssue(labels: const <String>['bug']),
+        now: _now,
+      );
+      expect(untriaged, isNotNull);
+      expect(untriaged!.section, IssueSection.untriaged);
+      expect(untriaged.nextStep, 'Triage issue');
+
+      final IssueAnalysis? responded = analyzeIssue(
+        makeIssue(labels: const <String>['bug'], memberCommentDaysAgo: 3),
+        now: _now,
+      );
+      expect(responded, isNull);
+    });
+  });
+
+  test('analyzePR respects requiredApprovals: 1 for single-reviewer repositories', () {
+    final PRInfo pr = _pr(authorCommentDaysAgo: 20, memberCommentDaysAgo: 16);
+    _addReviewer(pr, 'alice', decision: ReviewState.approved, decisionDaysAgo: 16);
+    final PRAnalysis analysis = analyzePR(pr, now: _now, requiredApprovals: 1);
+    expect(analysis.section, Section.waitingOnTeam);
+    expect(analysis.nextStep, "Approved; check why it hasn't landed");
   });
 }

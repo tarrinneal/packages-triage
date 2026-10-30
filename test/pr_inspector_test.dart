@@ -512,4 +512,40 @@ void main() {
       expect(defaultIssuesRepoFor('other/repo'), 'other/repo');
     },
   );
+
+  test('parseCodeowners extracts individual handles and ignores team slugs and comments', () {
+    const codeowners = '''
+# Comment mentioning @ignored-user
+* @alice @my-org/core-team
+/packages/ @Bob-Smith # inline @comment-user
+''';
+    expect(parseCodeowners(codeowners), <String>{'alice', 'bob-smith'});
+  });
+
+  test('fetchRoster falls back to .github/CODEOWNERS when SUGGESTED_REVIEWERS.md is 404', () async {
+    final GitHubClient client = replayClient(<String, Map<String, Object?>>{
+      _url('/repos/$_repo/contents/SUGGESTED_REVIEWERS.md'): <String, Object?>{
+        'status': 404,
+        'link': null,
+        'body': '{"message": "Not Found"}',
+      },
+      _url('/repos/$_repo/contents/.github/CODEOWNERS'): _ok(<String, Object?>{
+        'content': base64.encode(utf8.encode('* @OwnerOne @org/team @owner-two\n')),
+      }),
+    });
+    try {
+      final Set<String> roster = await fetchRoster(client, _repo, <Map<String, dynamic>>[]);
+      expect(roster, <String>{'ownerone', 'owner-two'});
+    } finally {
+      client.close();
+    }
+  });
+
+  test('parseGitHubRepoFromRemoteUrl parses HTTPS and SSH GitHub URLs', () {
+    expect(parseGitHubRepoFromRemoteUrl('https://github.com/acme/widgets.git'), 'acme/widgets');
+    expect(parseGitHubRepoFromRemoteUrl('https://github.com/acme/widgets/'), 'acme/widgets');
+    expect(parseGitHubRepoFromRemoteUrl('git@github.com:acme/widgets.git'), 'acme/widgets');
+    expect(parseGitHubRepoFromRemoteUrl('ssh://git@github.com/acme/widgets.git'), 'acme/widgets');
+    expect(parseGitHubRepoFromRemoteUrl('https://gitlab.com/acme/widgets.git'), isNull);
+  });
 }

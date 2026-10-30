@@ -2,12 +2,31 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import 'config.dart';
 import 'types.dart';
 import 'utils.dart';
 
-/// PRs with any of these labels are hidden by default, since another triage
-/// rotation handles them.
-const Set<String> defaultHiddenLabels = <String>{'triage-design'};
+export 'config.dart'
+    show
+        TriageConfig,
+        configFileFor,
+        defaultBotAccounts,
+        defaultConfigFileName,
+        defaultHiddenLabels,
+        defaultHighPriorityLabels,
+        defaultIssueFyiLabel,
+        defaultIssueTeamLabel,
+        defaultIssueTriagedLabel,
+        defaultIssuesRepo,
+        defaultNonHiddenFilterLabel,
+        defaultPackageLabelPrefix,
+        defaultPriorityLabels,
+        defaultRepos,
+        defaultRequiredApprovals,
+        defaultRosterFile,
+        defaultRoutingLabelPrefixes,
+        defaultWaitingForResponseLabels,
+        defaultWorkflowRepo;
 
 /// Days of waiting after which a PR is due for attention.
 const int dueDays = 7;
@@ -75,8 +94,8 @@ bool hasHiddenLabel(PRInfo pr, Set<String> hiddenLabels) => pr.labels.any(hidden
 
 /// Whether [label] says which package, platform, or triage rotation a PR
 /// belongs to, which makes it worth showing in the report.
-bool isRoutingLabel(String label) =>
-    label.startsWith('p: ') || label.startsWith('platform-') || label.startsWith('triage-');
+bool isRoutingLabel(String label, {TriageConfig config = const TriageConfig()}) =>
+    config.routingLabelPrefixes.any(label.startsWith);
 
 /// How long [analysis]'s PR has been waiting, and on whom, e.g. "12d on team".
 String waitingLabel(PRAnalysis analysis) {
@@ -119,14 +138,22 @@ int comparePRs(PRAnalysis a, PRAnalysis b) {
 
 /// Decides where [pr] goes in the report as of [now], how long it has been
 /// waiting, and what a triager should do next.
-PRAnalysis analyzePR(PRInfo pr, {required DateTime now}) {
+PRAnalysis analyzePR(
+  PRInfo pr, {
+  required DateTime now,
+  int? requiredApprovals,
+  TriageConfig config = const TriageConfig(),
+}) {
+  final int effectiveRequiredApprovals = requiredApprovals ?? config.requiredApprovals;
   final ReportPage page = pr.authorType == ContributorType.member
       ? ReportPage.team
       : ReportPage.community;
   final isCommunityPR = pr.authorType == ContributorType.community;
+  final rosterSource = config.rosterFile.isNotEmpty
+      ? 'in ${config.rosterFile}, CODEOWNERS, or requested as a reviewer'
+      : 'in CODEOWNERS or requested as a reviewer';
   final reasons = <String>[
-    if (pr.authorTypeFromRoster)
-      '@${pr.author} counts as team: in SUGGESTED_REVIEWERS.md or requested as a reviewer',
+    if (pr.authorTypeFromRoster) '@${pr.author} counts as team: $rosterSource',
   ];
 
   PRAnalysis place(
@@ -243,11 +270,12 @@ PRAnalysis analyzePR(PRInfo pr, {required DateTime now}) {
 
   final bool hasInProgressReview = hasPendingReview || hasCommentReview || hasBlockingReview;
 
-  // Don't count <2 as missing unless one of them is an approval, since
-  // community PR reviews are often intentionally serial (to reduce sunk time
-  // if the PR is abandoned).
+  // Don't count <requiredApprovals as missing unless one of them is an
+  // approval, since community PR reviews are often intentionally serial (to
+  // reduce sunk time if the PR is abandoned).
+  final int approvals = reviewStateCount[ReviewState.approved] ?? 0;
   final bool missingReviewer =
-      isCommunityPR && !hasInProgressReview && (reviewStateCount[ReviewState.approved] ?? 0) <= 1;
+      isCommunityPR && !hasInProgressReview && approvals < effectiveRequiredApprovals;
 
   if (pr.isDraft) {
     return place(
@@ -311,12 +339,16 @@ PRAnalysis analyzePR(PRInfo pr, {required DateTime now}) {
     Section.waitingOnTeam,
     waitingSince,
     waitingSinceDescription,
-    (Urgency urgency) => _teamNextStep(pr, urgency),
+    (Urgency urgency) => _teamNextStep(pr, urgency, requiredApprovals: effectiveRequiredApprovals),
     isFollowUp: hasAuthorFollowUp,
   );
 }
 
-String _teamNextStep(PRInfo pr, Urgency urgency) {
+String _teamNextStep(
+  PRInfo pr,
+  Urgency urgency, {
+  int requiredApprovals = defaultRequiredApprovals,
+}) {
   if (urgency == Urgency.notYet) {
     return '';
   }
@@ -333,12 +365,15 @@ String _teamNextStep(PRInfo pr, Urgency urgency) {
       ? requested
       : engaged.isNotEmpty
       ? engaged
-      : <String>[if (pr.memberComment != null && pr.approvalCount < 2) pr.memberComment!.username];
+      : <String>[
+          if (pr.memberComment != null && pr.approvalCount < requiredApprovals)
+            pr.memberComment!.username,
+        ];
   if (toPing.isNotEmpty) {
     final String mentions = toPing.map((String name) => '@$name').join(', ');
     return urgency == Urgency.critical ? 'Ping or reassign $mentions' : 'Ping $mentions';
   }
-  if (pr.approvalCount >= 2) {
+  if (pr.approvalCount >= requiredApprovals) {
     return "Approved; check why it hasn't landed";
   }
   return 'No reviewer assigned';
@@ -348,8 +383,8 @@ String _teamNextStep(PRInfo pr, Urgency urgency) {
 const Set<String> priorityLabels = <String>{'P0', 'P1', 'P2', 'P3'};
 
 /// Returns the priority label (`P0`–`P3`) on [issue], or `null` if none is set.
-String? issuePriority(IssueInfo issue) {
-  for (final p in const <String>['P0', 'P1', 'P2', 'P3']) {
+String? issuePriority(IssueInfo issue, {TriageConfig config = const TriageConfig()}) {
+  for (final String p in config.priorityLabels) {
     if (issue.labels.contains(p)) {
       return p;
     }
@@ -358,32 +393,57 @@ String? issuePriority(IssueInfo issue) {
 }
 
 /// Labels indicating that an item is waiting on a response from the author.
-const Set<String> waitingForResponseLabels = <String>{
-  'waiting for response',
-  'waiting-for-response',
-  'waiting for customer response',
-};
+const Set<String> waitingForResponseLabels = defaultWaitingForResponseLabels;
 
 /// Whether [labels] includes any of [waitingForResponseLabels].
-bool hasWaitingForResponseLabel(Iterable<String> labels) =>
-    labels.any(waitingForResponseLabels.contains);
+bool hasWaitingForResponseLabel(
+  Iterable<String> labels, {
+  TriageConfig config = const TriageConfig(),
+}) => labels.any(config.waitingForResponseLabels.contains);
 
 /// Whether [label] is useful to display on an issue row.
-bool isIssueDisplayLabel(String label) =>
-    isRoutingLabel(label) ||
-    priorityLabels.contains(label) ||
-    label == 'fyi-ecosystem' ||
-    waitingForResponseLabels.contains(label);
+bool isIssueDisplayLabel(String label, {TriageConfig config = const TriageConfig()}) =>
+    isRoutingLabel(label, config: config) ||
+    config.priorityLabels.contains(label) ||
+    (config.issueFyiLabel != null && label == config.issueFyiLabel) ||
+    config.waitingForResponseLabels.contains(label);
+
+const String _unsetIssueLabel = '\u0000';
 
 /// The heading for [section] on the issues page.
-String issueSectionTitle(IssueSection section) => switch (section) {
-  IssueSection.loadError => 'Failed to load',
-  IssueSection.untriaged => 'Untriaged (team-ecosystem)',
-  IssueSection.fyiEcosystem => 'FYI Ecosystem (fyi-ecosystem)',
-  IssueSection.waitingOnTeam => 'Waiting on team (author followed up)',
-  IssueSection.highPriority => 'High priority (P0 / P1)',
-  IssueSection.waitingOnAuthor => 'Waiting on author (waiting for response)',
-};
+String issueSectionTitle(
+  IssueSection section, {
+  String? teamLabel = _unsetIssueLabel,
+  String? fyiLabel = _unsetIssueLabel,
+  TriageConfig config = const TriageConfig(),
+}) {
+  final String? effectiveTeamLabel = identical(teamLabel, _unsetIssueLabel)
+      ? config.issueTeamLabel
+      : teamLabel;
+  final String? effectiveFyiLabel = identical(fyiLabel, _unsetIssueLabel)
+      ? config.issueFyiLabel
+      : fyiLabel;
+  final highPriorityLabel = config.highPriorityLabels.isNotEmpty
+      ? 'High priority (${config.highPriorityLabels.join(' / ')})'
+      : 'High priority';
+  final String waitingLabel = config.waitingForResponseLabels.firstOrNull ?? 'waiting for response';
+  return switch (section) {
+    IssueSection.loadError => 'Failed to load',
+    IssueSection.untriaged =>
+      effectiveTeamLabel != null && effectiveTeamLabel.isNotEmpty
+          ? 'Untriaged ($effectiveTeamLabel)'
+          : 'Untriaged',
+    IssueSection.fyiEcosystem =>
+      effectiveFyiLabel == defaultIssueFyiLabel
+          ? 'FYI Ecosystem ($defaultIssueFyiLabel)'
+          : (effectiveFyiLabel != null && effectiveFyiLabel.isNotEmpty
+                ? 'FYI ($effectiveFyiLabel)'
+                : 'FYI'),
+    IssueSection.waitingOnTeam => 'Waiting on team (author followed up)',
+    IssueSection.highPriority => highPriorityLabel,
+    IssueSection.waitingOnAuthor => 'Waiting on author ($waitingLabel)',
+  };
+}
 
 /// How long [analysis]'s issue has been waiting, and on whom.
 String issueWaitingLabel(IssueAnalysis analysis) {
@@ -424,7 +484,14 @@ int compareIssues(IssueAnalysis a, IssueAnalysis b) {
 ///
 /// Returns `null` for already-triaged issues that are not high priority, not
 /// waiting on a team follow-up, and not waiting on the author.
-IssueAnalysis? analyzeIssue(IssueInfo issue, {required DateTime now}) {
+IssueAnalysis? analyzeIssue(
+  IssueInfo issue, {
+  required DateTime now,
+  String? teamLabel,
+  String? fyiLabel,
+  String? triagedLabel,
+  TriageConfig config = const TriageConfig(),
+}) {
   if (issue.fetchErrors.isNotEmpty) {
     return IssueAnalysis(
       issue: issue,
@@ -437,11 +504,19 @@ IssueAnalysis? analyzeIssue(IssueInfo issue, {required DateTime now}) {
     );
   }
 
-  final bool isTeamEcosystem = issue.labels.contains('team-ecosystem');
-  final bool isFyiEcosystem = issue.labels.contains('fyi-ecosystem');
-  final bool isTriaged = issue.labels.contains('triaged-ecosystem');
-  final String? priority = issuePriority(issue);
-  final bool hasWaitingForResponse = hasWaitingForResponseLabel(issue.labels);
+  final String effectiveTeamLabel = teamLabel ?? (config.issueTeamLabel ?? '');
+  final String effectiveFyiLabel = fyiLabel ?? (config.issueFyiLabel ?? '');
+  final String effectiveTriagedLabel = triagedLabel ?? config.issueTriagedLabel;
+  final bool isTeamLabeled =
+      effectiveTeamLabel.isNotEmpty && issue.labels.contains(effectiveTeamLabel);
+  final bool isFyiLabeled =
+      effectiveFyiLabel.isNotEmpty && issue.labels.contains(effectiveFyiLabel);
+  final bool isTriaged =
+      effectiveTriagedLabel.isNotEmpty && issue.labels.contains(effectiveTriagedLabel);
+  final String? priority = issuePriority(issue, config: config);
+  final bool hasWaitingForResponse = hasWaitingForResponseLabel(issue.labels, config: config);
+  final String primaryWaitingLabel =
+      config.waitingForResponseLabels.firstOrNull ?? 'waiting for response';
 
   final DateTime lastAuthorCommentDate = issue.authorComment?.date ?? issue.creationDate;
   final DateTime? lastMemberCommentDate = issue.memberComment?.date;
@@ -480,7 +555,7 @@ IssueAnalysis? analyzeIssue(IssueInfo issue, {required DateTime now}) {
     );
   }
 
-  if (isFyiEcosystem && !isTeamEcosystem) {
+  if (isFyiLabeled && !isTeamLabeled) {
     if (isTriaged) {
       return null;
     }
@@ -488,25 +563,29 @@ IssueAnalysis? analyzeIssue(IssueInfo issue, {required DateTime now}) {
       IssueSection.fyiEcosystem,
       issue.creationDate,
       'the issue was opened',
-      (_) => 'Review and add triaged-ecosystem',
-      reasons: <String>['Labeled fyi-ecosystem without triaged-ecosystem'],
+      (_) => 'Review and add $effectiveTriagedLabel',
+      reasons: <String>['Labeled $effectiveFyiLabel without $effectiveTriagedLabel'],
       minimumUrgency: Urgency.due,
       isFollowUp: hasAuthorFollowUp,
     );
   }
 
-  if (isTeamEcosystem && (!isTriaged || priority == null)) {
+  final String priorityRange = config.priorityLabels.length >= 2
+      ? '${config.priorityLabels.first}–${config.priorityLabels.last}'
+      : config.priorityLabels.join('/');
+  final bool needsPriority = config.priorityLabels.isNotEmpty && priority == null;
+  if (isTeamLabeled && (!isTriaged || needsPriority)) {
     final String missingReason;
     final String step;
-    if (!isTriaged && priority == null) {
-      missingReason = 'Missing triaged-ecosystem and priority label';
-      step = 'Assign priority and add triaged-ecosystem';
+    if (!isTriaged && needsPriority) {
+      missingReason = 'Missing $effectiveTriagedLabel and priority label';
+      step = 'Assign priority and add $effectiveTriagedLabel';
     } else if (!isTriaged) {
-      missingReason = 'Missing triaged-ecosystem label';
-      step = 'Triage and add triaged-ecosystem';
+      missingReason = 'Missing $effectiveTriagedLabel label';
+      step = 'Triage and add $effectiveTriagedLabel';
     } else {
-      missingReason = 'Has triaged-ecosystem, but missing a P0–P3 priority label';
-      step = 'Assign a priority label (P0–P3)';
+      missingReason = 'Has $effectiveTriagedLabel, but missing a $priorityRange priority label';
+      step = 'Assign a priority label ($priorityRange)';
     }
     return place(
       IssueSection.untriaged,
@@ -533,7 +612,7 @@ IssueAnalysis? analyzeIssue(IssueInfo issue, {required DateTime now}) {
       usedEarliestFollowUp ? "the author's follow-up comment" : "the author's last comment",
       (Urgency urgency) {
         if (hasWaitingForResponse) {
-          return 'Remove "waiting for response" and ping @${issue.memberComment!.username}';
+          return 'Remove "$primaryWaitingLabel" and ping @${issue.memberComment!.username}';
         }
         return urgency == Urgency.notYet
             ? 'Follow up with @${issue.author} (last team comment by @${issue.memberComment!.username})'
@@ -541,7 +620,7 @@ IssueAnalysis? analyzeIssue(IssueInfo issue, {required DateTime now}) {
       },
       reasons: <String>[
         "The author replied after @${issue.memberComment!.username}'s comment",
-        if (hasWaitingForResponse) 'Still labeled waiting for response, but the author has replied',
+        if (hasWaitingForResponse) 'Still labeled $primaryWaitingLabel, but the author has replied',
       ],
       isFollowUp: true,
     );
@@ -557,21 +636,43 @@ IssueAnalysis? analyzeIssue(IssueInfo issue, {required DateTime now}) {
         Urgency.due || Urgency.overdue => 'Ping @${issue.author}',
         Urgency.critical => 'Close as stale or ping @${issue.author}',
       },
-      reasons: <String>['Labeled waiting for response'],
+      reasons: <String>['Labeled $primaryWaitingLabel'],
     );
   }
 
-  if (priority == 'P0' || priority == 'P1') {
+  if (priority != null && config.highPriorityLabels.contains(priority)) {
     final ownerStep = issue.assignees.isEmpty
         ? 'Assign an owner'
         : 'Check progress with ${issue.assignees.map((String a) => '@$a').join(', ')}';
+    final bool isTopPriority =
+        config.priorityLabels.isNotEmpty && priority == config.priorityLabels.first;
     return place(
       IssueSection.highPriority,
       issue.updatedDate,
       'the issue was last updated',
       (_) => ownerStep,
       reasons: <String>['Labeled $priority'],
-      minimumUrgency: priority == 'P0' ? Urgency.critical : Urgency.due,
+      minimumUrgency: isTopPriority ? Urgency.critical : Urgency.due,
+    );
+  }
+
+  // Generic fallback for repositories that do not use team/fyi labels: surface
+  // community issues that have received no team response and have no triage or
+  // priority label yet.
+  if (!isTeamLabeled &&
+      !isFyiLabeled &&
+      !isTriaged &&
+      !issue.labels.contains('triaged') &&
+      priority == null &&
+      issue.memberComment == null &&
+      issue.authorType == ContributorType.community) {
+    return place(
+      IssueSection.untriaged,
+      issue.creationDate,
+      'the issue was opened',
+      (_) => 'Triage issue',
+      reasons: <String>['No team response or triage label yet'],
+      minimumUrgency: Urgency.due,
     );
   }
 

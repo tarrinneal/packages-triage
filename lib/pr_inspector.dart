@@ -3,23 +3,23 @@
 // found in the LICENSE file.
 
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:collection/collection.dart';
 
+import 'config.dart';
 import 'detail_cache.dart';
 import 'github_client.dart';
 import 'types.dart';
 import 'utils.dart';
-
-const Set<String> _botAccounts = <String>{'fluttergithubbot', 'engine-flutter-autoroll'};
 
 const Set<String> _teamAssociations = <String>{'OWNER', 'MEMBER', 'COLLABORATOR'};
 
 /// Whether [login] is an automated account.
 ///
 /// [userType] is the `type` of the GitHub user object, if known.
-bool isBot(String login, {String? userType}) =>
-    userType == 'Bot' || login.endsWith('[bot]') || _botAccounts.contains(login);
+bool isBot(String login, {String? userType, TriageConfig config = const TriageConfig()}) =>
+    userType == 'Bot' || login.endsWith('[bot]') || config.botAccounts.contains(login);
 
 /// Whether [login] is on the team.
 ///
@@ -129,8 +129,8 @@ Map<String, String> parseSuggestedReviewers(String markdown) {
   final allPackages = <String>{for (final section in sections) ...section.packages};
 
   final result = <String, String>{};
-  for (final String pkg in allPackages) {
-    final matching = sections
+  for (final pkg in allPackages) {
+    final List<({String header, List<String> packages, List<String> bullets})> matching = sections
         .where((section) => section.packages.any((String p) => p == pkg || p.startsWith('${pkg}_')))
         .toList();
     if (matching.isEmpty) {
@@ -138,7 +138,7 @@ Map<String, String> parseSuggestedReviewers(String markdown) {
     }
     final buffer = StringBuffer();
     for (var i = 0; i < matching.length; i++) {
-      final section = matching[i];
+      final ({String header, List<String> packages, List<String> bullets}) section = matching[i];
       if (i == 0) {
         buffer.writeln('Suggested reviewers (${section.header}):');
       } else {
@@ -153,55 +153,143 @@ Map<String, String> parseSuggestedReviewers(String markdown) {
   return result;
 }
 
+/// Extracts individual GitHub usernames (`@login`) from a `CODEOWNERS` file,
+/// ignoring `#` comments and `@org/team` team slugs.
+Set<String> parseCodeowners(String content) {
+  final owners = <String>{};
+  final userPattern = RegExp(r'(?:^|\s)@([A-Za-z0-9-]+)(?=\s|$)');
+  for (final String rawLine in const LineSplitter().convert(content)) {
+    final String line = rawLine.trim();
+    if (line.isEmpty || line.startsWith('#')) {
+      continue;
+    }
+    final String withoutInlineComment = line.split(RegExp(r'\s+#')).first;
+    for (final Match match in userPattern.allMatches(withoutInlineComment)) {
+      owners.add(match.group(1)!.toLowerCase());
+    }
+  }
+  return owners;
+}
+
+/// Parses a GitHub `owner/repo` slug from a git remote URL (HTTPS or SSH), or
+/// returns `null` if [remoteUrl] is not a recognizable GitHub URL.
+String? parseGitHubRepoFromRemoteUrl(String remoteUrl) {
+  final String trimmed = remoteUrl.trim();
+  final patterns = <RegExp>[
+    RegExp(r'^https?://github\.com/([\w.-]+/[\w.-]+?)(?:\.git)?/*$'),
+    RegExp(r'^git@github\.com:([\w.-]+/[\w.-]+?)(?:\.git)?/*$'),
+    RegExp(r'^ssh://git@github\.com/([\w.-]+/[\w.-]+?)(?:\.git)?/*$'),
+  ];
+  for (final pattern in patterns) {
+    final Match? match = pattern.firstMatch(trimmed);
+    if (match != null) {
+      return match.group(1);
+    }
+  }
+  return null;
+}
+
+/// Attempts to detect the GitHub `owner/repo` for [workingDirectory] (by
+/// default, [Directory.current]) from `git remote get-url origin`.
+String? detectGitHubRepo({Directory? workingDirectory}) {
+  try {
+    final ProcessResult result = Process.runSync('git', const <String>[
+      'remote',
+      'get-url',
+      'origin',
+    ], workingDirectory: (workingDirectory ?? Directory.current).path);
+    if (result.exitCode == 0 && result.stdout is String) {
+      return parseGitHubRepoFromRemoteUrl(result.stdout as String);
+    }
+  } on ProcessException {
+    // `git` is not installed or not available.
+  }
+  return null;
+}
+
 /// Builds a set of team members' logins, in lowercase, that doesn't depend on
 /// what org membership the caller can see.
 ///
 /// GitHub only allows requesting reviews from collaborators, so everyone with
 /// a pending review request on one of [prs] is included, as is everyone
-/// mentioned in the repository's SUGGESTED_REVIEWERS.md. If
-/// [suggestedReviewers] is provided, it is populated with package reviewer
-/// descriptions parsed from `SUGGESTED_REVIEWERS.md`.
+/// mentioned in the repository's [TriageConfig.rosterFile] (or, if that file is
+/// absent, `.github/CODEOWNERS` or `CODEOWNERS`). If [suggestedReviewers] is
+/// provided, it is populated with package reviewer descriptions parsed from
+/// [TriageConfig.rosterFile].
 Future<Set<String>> fetchRoster(
   GitHubClient client,
   String repo,
   Iterable<Map<String, dynamic>> prs, {
   Map<String, String>? suggestedReviewers,
   void Function(String message)? onWarning,
+  TriageConfig config = const TriageConfig(),
 }) async {
   final roster = <String>{
     for (final Map<String, dynamic> pr in prs)
       for (final String login in _requestedReviewers(pr)) login.toLowerCase(),
   };
-  try {
-    final GitHubResponse response = await client.get(
-      _apiUrl('/repos/$repo/contents/SUGGESTED_REVIEWERS.md'),
-    );
-    final content = (response.json! as Map<String, dynamic>)['content']! as String;
-    final String text = utf8.decode(base64.decode(content.replaceAll(RegExp(r'\s'), '')));
-    roster.addAll(
-      RegExp(r'@([A-Za-z0-9-]+)').allMatches(text).map((Match m) => m.group(1)!.toLowerCase()),
-    );
-    if (suggestedReviewers != null) {
-      suggestedReviewers.addAll(parseSuggestedReviewers(text));
+  var foundSuggestedReviewers = false;
+  final String rosterFile = config.rosterFile;
+  if (rosterFile.isNotEmpty) {
+    try {
+      final GitHubResponse response = await client.get(
+        _apiUrl('/repos/$repo/contents/$rosterFile'),
+      );
+      final content = (response.json! as Map<String, dynamic>)['content']! as String;
+      final String text = utf8.decode(base64.decode(content.replaceAll(RegExp(r'\s'), '')));
+      roster.addAll(
+        RegExp(r'@([A-Za-z0-9-]+)').allMatches(text).map((Match m) => m.group(1)!.toLowerCase()),
+      );
+      if (suggestedReviewers != null) {
+        suggestedReviewers.addAll(parseSuggestedReviewers(text));
+      }
+      foundSuggestedReviewers = true;
+    } on GitHubException catch (e) {
+      // Not every repository has the file.
+      if (e.statusCode != 404) {
+        onWarning?.call('Could not read $rosterFile: $e');
+      }
+    } on FormatException catch (e) {
+      onWarning?.call('Could not read $rosterFile: $e');
     }
-  } on GitHubException catch (e) {
-    // Not every repository has the file.
-    if (e.statusCode != 404) {
-      onWarning?.call('Could not read SUGGESTED_REVIEWERS.md: $e');
+  }
+
+  if (!foundSuggestedReviewers) {
+    for (final codeownersPath in const <String>['.github/CODEOWNERS', 'CODEOWNERS']) {
+      try {
+        final GitHubResponse response = await client.get(
+          _apiUrl('/repos/$repo/contents/$codeownersPath'),
+        );
+        final content = (response.json! as Map<String, dynamic>)['content'] as String?;
+        if (content != null) {
+          final String text = utf8.decode(base64.decode(content.replaceAll(RegExp(r'\s'), '')));
+          roster.addAll(parseCodeowners(text));
+          break;
+        }
+      } on GitHubException catch (e) {
+        if (e.statusCode != 404 && !e.message.startsWith('No recorded response')) {
+          onWarning?.call('Could not read $codeownersPath: $e');
+        }
+      } on FormatException catch (e) {
+        onWarning?.call('Could not read $codeownersPath: $e');
+      }
     }
-  } on FormatException catch (e) {
-    onWarning?.call('Could not read SUGGESTED_REVIEWERS.md: $e');
   }
   return roster;
 }
 
 /// Builds a [PRInfo] from a PR listing entry, without comment or review data.
-PRInfo prInfoFromListing(Map<String, dynamic> pr, Set<String> roster, {String repo = ''}) {
+PRInfo prInfoFromListing(
+  Map<String, dynamic> pr,
+  Set<String> roster, {
+  String repo = '',
+  TriageConfig config = const TriageConfig(),
+}) {
   final user = pr['user']! as Map<String, dynamic>;
   final login = user['login']! as String;
   final association = pr['author_association'] as String?;
   final ContributorType authorType;
-  if (isBot(login, userType: user['type'] as String?)) {
+  if (isBot(login, userType: user['type'] as String?, config: config)) {
     authorType = ContributorType.bot;
   } else if (isTeamMember(login, association, roster)) {
     authorType = ContributorType.member;
@@ -243,6 +331,7 @@ Future<List<PRInfo>> fetchAllPRDetails(
   int concurrency = 8,
   DetailCache? cache,
   void Function(int done, int total, PRInfo pr)? onProgress,
+  TriageConfig config = const TriageConfig(),
 }) async {
   final results = List<PRInfo?>.filled(prs.length, null);
   var next = 0;
@@ -250,7 +339,14 @@ Future<List<PRInfo>> fetchAllPRDetails(
   Future<void> worker() async {
     while (next < prs.length) {
       final int index = next++;
-      final PRInfo pr = await fetchPRDetails(client, repo, prs[index], roster, cache: cache);
+      final PRInfo pr = await fetchPRDetails(
+        client,
+        repo,
+        prs[index],
+        roster,
+        cache: cache,
+        config: config,
+      );
       results[index] = pr;
       onProgress?.call(++done, prs.length, pr);
     }
@@ -280,15 +376,16 @@ Future<PRInfo> fetchPRDetails(
   Set<String> roster, {
   bool alwaysFetchDetails = false,
   DetailCache? cache,
+  TriageConfig config = const TriageConfig(),
 }) async {
-  final PRInfo pr = prInfoFromListing(listing, roster, repo: repo);
+  final PRInfo pr = prInfoFromListing(listing, roster, repo: repo, config: config);
   if (alwaysFetchDetails || !(pr.isDraft || pr.authorType == ContributorType.bot)) {
     final updatedAt = listing['updated_at']! as String;
     Map<_CommentType, List<_Activity>>? activity = _activityFromJson(
       cache?.lookup(pr.number, updatedAt),
     );
     if (activity == null) {
-      activity = await _fetchActivity(client, repo, pr);
+      activity = await _fetchActivity(client, repo, pr, config: config);
       // Incomplete data isn't saved, so that failed fetches are retried.
       if (pr.fetchErrors.isEmpty) {
         cache?.store(pr.number, updatedAt, _activityToJson(activity));
@@ -316,35 +413,56 @@ Future<PRInfo> fetchPRDetails(
 
 /// The repository where issues for [repo] are tracked.
 ///
-/// `flutter/packages` and `flutter/core-packages` track their issues in
-/// `flutter/flutter`.
-String defaultIssuesRepoFor(String repo) =>
-    (repo == 'flutter/packages' || repo == 'flutter/core-packages') ? 'flutter/flutter' : repo;
+/// Configured `repos` in [config] (by default `flutter/packages` and
+/// `flutter/core-packages`) track their issues in [TriageConfig.issuesRepo]
+/// (`flutter/flutter` by default).
+String defaultIssuesRepoFor(String repo, {TriageConfig config = const TriageConfig()}) =>
+    (config.issuesRepo != null && config.repos.contains(repo)) ? config.issuesRepo! : repo;
 
-/// Fetches open package issues in [issuesRepo] that may need triage or a
-/// follow-up from the team.
+/// Fetches open issues in [issuesRepo] that may need triage or a follow-up
+/// from the team.
 ///
-/// Queries GitHub's issue search API for:
-/// - untriaged `team-ecosystem` issues (`-label:triaged-ecosystem`),
-/// - untriaged `fyi-ecosystem` issues (`-label:triaged-ecosystem`),
-/// - open `P0` and `P1` `team-ecosystem` issues,
-/// - open `team-ecosystem` issues labeled `waiting for response`, and
-/// - recently updated `team-ecosystem` issues (to catch contributor follow-ups
+/// When [teamLabel] is set (or defaults to [TriageConfig.issueTeamLabel] for
+/// [TriageConfig.issuesRepo]), queries GitHub's issue search API for:
+/// - untriaged [teamLabel] issues (`-label:<triagedLabel>`),
+/// - untriaged [fyiLabel] issues (`-label:<triagedLabel>`),
+/// - open high-priority [teamLabel] issues,
+/// - open [teamLabel] issues labeled `waiting for response`, and
+/// - recently updated [teamLabel] issues (to catch contributor follow-ups
 ///   after a team member's comment).
+///
+/// For other repositories when [teamLabel] is not set, queries open issues in
+/// [issuesRepo] directly.
 Future<List<Map<String, dynamic>>> fetchTriageIssues(
   GitHubClient client,
   String issuesRepo, {
   required DateTime now,
   int? limit,
+  String? teamLabel,
+  String? fyiLabel,
+  String? triagedLabel,
+  TriageConfig config = const TriageConfig(),
 }) async {
+  final bool isConfiguredIssuesRepo = config.issuesRepo != null && issuesRepo == config.issuesRepo;
+  final String? effectiveTeamLabel =
+      teamLabel ?? (isConfiguredIssuesRepo ? config.issueTeamLabel : null);
+  final String? effectiveFyiLabel =
+      fyiLabel ?? (isConfiguredIssuesRepo ? config.issueFyiLabel : null);
+  final String effectiveTriagedLabel = triagedLabel ?? config.issueTriagedLabel;
+  final String highPriorities = config.highPriorityLabels.join(',');
+  final String waitingLabel = config.waitingForResponseLabels.firstOrNull ?? 'waiting for response';
   final String recentCutoff = formatAsDay(now.subtract(const Duration(days: 60)));
-  final queries = <String>[
-    'repo:$issuesRepo is:issue is:open label:team-ecosystem -label:triaged-ecosystem',
-    'repo:$issuesRepo is:issue is:open label:fyi-ecosystem -label:triaged-ecosystem',
-    'repo:$issuesRepo is:issue is:open label:team-ecosystem label:P0,P1',
-    'repo:$issuesRepo is:issue is:open label:team-ecosystem label:"waiting for response"',
-    'repo:$issuesRepo is:issue is:open label:team-ecosystem updated:>=$recentCutoff',
-  ];
+  final queries = effectiveTeamLabel != null && effectiveTeamLabel.isNotEmpty
+      ? <String>[
+          'repo:$issuesRepo is:issue is:open label:$effectiveTeamLabel -label:$effectiveTriagedLabel',
+          if (effectiveFyiLabel != null && effectiveFyiLabel.isNotEmpty)
+            'repo:$issuesRepo is:issue is:open label:$effectiveFyiLabel -label:$effectiveTriagedLabel',
+          if (highPriorities.isNotEmpty)
+            'repo:$issuesRepo is:issue is:open label:$effectiveTeamLabel label:$highPriorities',
+          'repo:$issuesRepo is:issue is:open label:$effectiveTeamLabel label:"$waitingLabel"',
+          'repo:$issuesRepo is:issue is:open label:$effectiveTeamLabel updated:>=$recentCutoff',
+        ]
+      : <String>['repo:$issuesRepo is:issue is:open'];
   final byNumber = <int, Map<String, dynamic>>{};
   for (final query in queries) {
     final GitHubResponse response = await client.get(
@@ -373,12 +491,16 @@ Future<List<Map<String, dynamic>>> fetchTriageIssues(
 }
 
 /// Builds an [IssueInfo] from a GitHub issue object, without comment data.
-IssueInfo issueInfoFromListing(Map<String, dynamic> issue, Set<String> roster) {
+IssueInfo issueInfoFromListing(
+  Map<String, dynamic> issue,
+  Set<String> roster, {
+  TriageConfig config = const TriageConfig(),
+}) {
   final user = issue['user']! as Map<String, dynamic>;
   final login = user['login']! as String;
   final association = issue['author_association'] as String?;
   final ContributorType authorType;
-  if (isBot(login, userType: user['type'] as String?)) {
+  if (isBot(login, userType: user['type'] as String?, config: config)) {
     authorType = ContributorType.bot;
   } else if (isTeamMember(login, association, roster)) {
     authorType = ContributorType.member;
@@ -418,6 +540,7 @@ Future<List<IssueInfo>> fetchAllIssueDetails(
   int concurrency = 8,
   DetailCache? cache,
   void Function(int done, int total, IssueInfo issue)? onProgress,
+  TriageConfig config = const TriageConfig(),
 }) async {
   final results = List<IssueInfo?>.filled(issues.length, null);
   var next = 0;
@@ -431,6 +554,7 @@ Future<List<IssueInfo>> fetchAllIssueDetails(
         issues[index],
         roster,
         cache: cache,
+        config: config,
       );
       results[index] = issue;
       done++;
@@ -450,8 +574,9 @@ Future<IssueInfo> fetchIssueDetails(
   Map<String, dynamic> listing,
   Set<String> roster, {
   DetailCache? cache,
+  TriageConfig config = const TriageConfig(),
 }) async {
-  final IssueInfo issue = issueInfoFromListing(listing, roster);
+  final IssueInfo issue = issueInfoFromListing(listing, roster, config: config);
   if (issue.commentCount == 0) {
     issue.hasDetails = true;
     return issue;
@@ -460,7 +585,13 @@ Future<IssueInfo> fetchIssueDetails(
   List<_Activity>? comments = _issueCommentsFromJson(cache?.lookup(issue.number, updatedAt));
   if (comments == null) {
     try {
-      comments = await _fetchComments(client, issuesRepo, issue.number, _CommentType.issue);
+      comments = await _fetchComments(
+        client,
+        issuesRepo,
+        issue.number,
+        _CommentType.issue,
+        config: config,
+      );
       cache?.store(issue.number, updatedAt, _issueCommentsToJson(comments));
     } on Exception catch (e) {
       issue.fetchErrors.add('Failed to fetch issue comments: $e');
@@ -566,13 +697,20 @@ typedef _Activity = ({String login, String? association, DateTime date, String? 
 Future<Map<_CommentType, List<_Activity>>> _fetchActivity(
   GitHubClient client,
   String repo,
-  PRInfo pr,
-) async {
+  PRInfo pr, {
+  TriageConfig config = const TriageConfig(),
+}) async {
   final activity = <_CommentType, List<_Activity>>{};
   // Fetch all three types of comments.
   for (final _CommentType commentType in _CommentType.values) {
     try {
-      activity[commentType] = await _fetchComments(client, repo, pr.number, commentType);
+      activity[commentType] = await _fetchComments(
+        client,
+        repo,
+        pr.number,
+        commentType,
+        config: config,
+      );
     } on Exception catch (e) {
       pr.fetchErrors.add('Failed to fetch ${commentType.description}: $e');
     }
@@ -586,8 +724,9 @@ Future<List<_Activity>> _fetchComments(
   GitHubClient client,
   String repo,
   int number,
-  _CommentType commentType,
-) async {
+  _CommentType commentType, {
+  TriageConfig config = const TriageConfig(),
+}) async {
   final (String path, String dateKey) = switch (commentType) {
     _CommentType.issue => ('/repos/$repo/issues/$number/comments', 'created_at'),
     _CommentType.reviewInline => ('/repos/$repo/pulls/$number/comments', 'created_at'),
@@ -613,7 +752,7 @@ Future<List<_Activity>> _fetchComments(
       }
       final author = user['login']! as String;
       // Ignore bots.
-      if (isBot(author, userType: user['type'] as String?)) {
+      if (isBot(author, userType: user['type'] as String?, config: config)) {
         continue;
       }
       activity.add((

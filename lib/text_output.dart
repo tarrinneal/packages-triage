@@ -20,16 +20,18 @@ void printTextReport(
   List<PRAnalysis> prs, {
   List<IssueAnalysis> issues = const <IssueAnalysis>[],
   String? issuesRepo,
-  Set<String> hiddenLabels = defaultHiddenLabels,
+  Set<String>? hiddenLabels,
   bool showHidden = false,
+  TriageConfig config = const TriageConfig(),
   Map<int, PreviousPlacement>? previous,
   StringSink? out,
 }) {
+  final Set<String> effectiveHiddenLabels = hiddenLabels ?? config.hiddenLabels;
   final StringSink sink = out ?? stdout;
   final headingPen = AnsiPen()..white(bold: true);
   final List<PRAnalysis> shown = showHidden
       ? prs
-      : prs.where((PRAnalysis a) => !hasHiddenLabel(a.pr, hiddenLabels)).toList();
+      : prs.where((PRAnalysis a) => !hasHiddenLabel(a.pr, effectiveHiddenLabels)).toList();
   for (final ReportPage page in ReportPage.values) {
     final List<PRAnalysis> pagePRs = shown.where((PRAnalysis a) => a.page == page).toList();
     sink
@@ -59,7 +61,7 @@ void printTextReport(
       if (rows.isEmpty) {
         continue;
       }
-      sink.writeln(headingPen('${issueSectionTitle(section)} (${rows.length})'));
+      sink.writeln(headingPen('${issueSectionTitle(section, config: config)} (${rows.length})'));
       for (final row in rows) {
         _printIssueRow(sink, row);
       }
@@ -69,7 +71,7 @@ void printTextReport(
   final int hiddenCount = prs.length - shown.length;
   if (hiddenCount > 0) {
     sink.writeln(
-      '$hiddenCount ${hiddenCount == 1 ? 'PR' : 'PRs'} labeled ${hiddenLabels.join(' or ')} '
+      '$hiddenCount ${hiddenCount == 1 ? 'PR' : 'PRs'} labeled ${effectiveHiddenLabels.join(' or ')} '
       'not shown; use --show-hidden to include them.',
     );
   }

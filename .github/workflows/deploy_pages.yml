@@ -115,6 +115,11 @@ jobs:
         if: steps.tz_check.outputs.should_run == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TRIAGE_REPOS: ${{ vars.TRIAGE_REPOS }}
+          TRIAGE_TEAM_LABEL: ${{ vars.TRIAGE_TEAM_LABEL }}
+          TRIAGE_FYI_LABEL: ${{ vars.TRIAGE_FYI_LABEL }}
+          TRIAGE_TRIAGED_LABEL: ${{ vars.TRIAGE_TRIAGED_LABEL }}
+          TRIAGE_REQUIRED_APPROVALS: ${{ vars.TRIAGE_REQUIRED_APPROVALS }}
           TZ: America/Los_Angeles
         run: dart run bin/pr_inspector.dart --html site/index.html
 
