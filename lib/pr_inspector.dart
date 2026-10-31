@@ -69,6 +69,28 @@ Future<Map<String, dynamic>> fetchSinglePR(GitHubClient client, String repo, int
   return response.json! as Map<String, dynamic>;
 }
 
+/// Filters a list of raw GitHub PR listing objects to those carrying at least
+/// one label in [prLabels] (matched case-insensitively).
+///
+/// Returns [prs] unchanged when [prLabels] is empty.
+List<Map<String, dynamic>> filterPRListingsByLabels(
+  List<Map<String, dynamic>> prs,
+  Set<String> prLabels,
+) {
+  if (prLabels.isEmpty) {
+    return prs;
+  }
+  final Set<String> lowerTargets = prLabels.map((String l) => l.toLowerCase()).toSet();
+  return <Map<String, dynamic>>[
+    for (final Map<String, dynamic> pr in prs)
+      if ((pr['labels'] as List<dynamic>? ?? const <dynamic>[]).cast<Map<String, dynamic>>().any(
+        (Map<String, dynamic> l) =>
+            lowerTargets.contains((l['name'] as String? ?? '').toLowerCase()),
+      ))
+        pr,
+  ];
+}
+
 List<String> _requestedReviewers(Map<String, dynamic> pr) => <String>[
   for (final Map<String, dynamic> user
       in (pr['requested_reviewers'] as List<dynamic>? ?? const <dynamic>[])

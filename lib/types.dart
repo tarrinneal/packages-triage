@@ -468,12 +468,13 @@ class TriageConfig {
     this.flutterTeam = 'ecosystem',
     this.refreshSchedule = defaultRefreshSchedule,
     this.teamMembers = const <String>[],
+    this.prLabels = const <String>{},
     this.issuesRepo = defaultIssuesRepo,
     this.workflowRepo = defaultWorkflowRepo,
     String? rosterFile = _deriveFromTeam,
     this.botAccounts = defaultBotAccounts,
     this.requiredApprovals = defaultRequiredApprovals,
-    this.hiddenLabels = defaultHiddenLabels,
+    Set<String>? hiddenLabels,
     this.nonHiddenFilterLabel = defaultNonHiddenFilterLabel,
     this.routingLabelPrefixes = defaultRoutingLabelPrefixes,
     this.packageLabelPrefix = defaultPackageLabelPrefix,
@@ -485,6 +486,7 @@ class TriageConfig {
     this.priorityLabels = defaultPriorityLabels,
     this.highPriorityLabels = defaultHighPriorityLabels,
   }) : _rosterFile = rosterFile,
+       _hiddenLabels = hiddenLabels,
        _issueTeamLabel = issueTeamLabel,
        _issueFyiLabel = issueFyiLabel,
        _issueTriagedLabel = issueTriagedLabel;
@@ -505,6 +507,10 @@ class TriageConfig {
 
   /// GitHub usernames of team members to include in the team roster.
   final List<String> teamMembers;
+
+  /// If non-empty, only open PRs carrying at least one of these labels are
+  /// included in the report.
+  final Set<String> prLabels;
 
   /// Repository where issues are tracked for [repos], or `null` to default to
   /// the PR repository itself.
@@ -533,8 +539,11 @@ class TriageConfig {
   /// as missing a reviewer.
   final int requiredApprovals;
 
+  final Set<String>? _hiddenLabels;
+
   /// PR labels that start out hidden by default on the report.
-  final Set<String> hiddenLabels;
+  Set<String> get hiddenLabels =>
+      _hiddenLabels ?? (flutterTeam == 'ecosystem' ? defaultHiddenLabels : const <String>{});
 
   /// Label displayed on the filter toggle chip for PRs without [hiddenLabels].
   final String nonHiddenFilterLabel;

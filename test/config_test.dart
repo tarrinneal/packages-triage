@@ -264,5 +264,64 @@ on:
       expect(synced, contains("- cron: '37 19 * * 2' # ecosystem"));
       expect(synced, contains("- cron: '0 17 * * 4' # ios"));
     });
+
+    test('all configs/*.dart files parse cleanly with ecosystem first', () {
+      final Map<String, TriageConfig> configs = loadConfigsDirectory(Directory('configs'));
+      expect(configs.keys.first, 'ecosystem');
+      expect(
+        configs.keys,
+        containsAll(<String>[
+          'accessibility',
+          'android',
+          'design',
+          'devexp',
+          'ecosystem',
+          'engine',
+          'fluttergpu',
+          'framework',
+          'infra',
+          'ios',
+          'linux',
+          'macos',
+          'text_input',
+          'tool',
+          'web',
+          'windows',
+        ]),
+      );
+      for (final MapEntry<String, TriageConfig> entry in configs.entries) {
+        expect(entry.value.repos, isNotEmpty, reason: '${entry.key} repos');
+        expect(entry.value.flutterTeam, isNotNull, reason: '${entry.key} flutterTeam');
+        expect(entry.value.refreshSchedule, isNotNull, reason: '${entry.key} refreshSchedule');
+        expect(entry.value.teamMembers, isNotEmpty, reason: '${entry.key} teamMembers');
+      }
+      expect(configs['design']!.hiddenLabels, isEmpty);
+      expect(configs['design']!.prLabels, contains('triage-design'));
+      expect(configs['ios']!.prLabels, contains('platform-ios'));
+    });
+
+    test('filterPRListingsByLabels filters open PRs by prLabels case-insensitively', () {
+      final prs = <Map<String, dynamic>>[
+        <String, dynamic>{
+          'number': 1,
+          'labels': <Map<String, dynamic>>[
+            <String, dynamic>{'name': 'platform-ios'},
+          ],
+        },
+        <String, dynamic>{
+          'number': 2,
+          'labels': <Map<String, dynamic>>[
+            <String, dynamic>{'name': 'platform-android'},
+          ],
+        },
+      ];
+      expect(filterPRListingsByLabels(prs, const <String>{}), hasLength(2));
+      final List<Map<String, dynamic>> filtered = filterPRListingsByLabels(prs, const <String>{
+        'PLATFORM-IOS',
+        'triage-ios',
+      });
+      expect(filtered, hasLength(1));
+      expect(filtered.single['number'], 1);
+    });
   });
 }

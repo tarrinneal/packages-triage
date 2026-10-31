@@ -425,10 +425,15 @@ Future<void> _report(
   for (final repo in repos) {
     try {
       stderr.writeln('Fetching open PRs in $repo...');
-      final List<Map<String, dynamic>> listing = await fetchOpenPRs(client, repo, limit: limit);
+      final List<Map<String, dynamic>> rawListing = await fetchOpenPRs(client, repo, limit: limit);
+      final List<Map<String, dynamic>> listing = usesConfiguredRepos && config.prLabels.isNotEmpty
+          ? filterPRListingsByLabels(rawListing, config.prLabels)
+          : rawListing;
       stderr.writeln(
         limit == null
-            ? 'Found ${listing.length} open PRs in $repo.'
+            ? (listing.length == rawListing.length
+                  ? 'Found ${listing.length} open PRs in $repo.'
+                  : 'Found ${listing.length} matching open PRs (of ${rawListing.length}) in $repo.')
             : 'Analyzing the ${listing.length} newest open PRs in $repo (--limit).',
       );
       listingsByRepo[repo] = listing;
