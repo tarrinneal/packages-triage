@@ -72,6 +72,7 @@ class PRInfo {
     this.repo = '',
     this.authorTypeFromRoster = false,
     this.labels = const <String>[],
+    this.body = '',
   });
 
   /// The PR number.
@@ -108,6 +109,9 @@ class PRInfo {
 
   /// The PR's label names.
   final List<String> labels;
+
+  /// The PR description, or an empty string if it has none.
+  final String body;
 
   /// The PR author's newest comment, if comments were fetched.
   Comment? authorComment;
@@ -269,6 +273,7 @@ class IssueInfo {
     this.labels = const <String>[],
     this.assignees = const <String>[],
     this.commentCount = 0,
+    this.body = '',
   });
 
   /// The issue number.
@@ -300,6 +305,9 @@ class IssueInfo {
 
   /// Total number of comments reported by GitHub's issue listing.
   final int commentCount;
+
+  /// The issue description, or an empty string if it has none.
+  final String body;
 
   /// The issue author's newest comment, if comments were fetched.
   Comment? authorComment;
@@ -479,6 +487,7 @@ class TriageConfig {
     this.routingLabelPrefixes = defaultRoutingLabelPrefixes,
     this.packageLabelPrefix = defaultPackageLabelPrefix,
     this.showAllLabels = false,
+    this.aiAnalysis = false,
     this.waitingForResponseLabels = defaultWaitingForResponseLabels,
     String? issueTeamLabel = _deriveFromTeam,
     String? issueFyiLabel = _deriveFromTeam,
@@ -556,6 +565,13 @@ class TriageConfig {
 
   /// Whether to display all non-CLA labels as chips on PR and issue rows.
   final bool showAllLabels;
+
+  /// Whether to add a short AI-generated next-step suggestion (from the Gemini
+  /// API) to this config's PRs and issues.
+  ///
+  /// Suggestions are cached until an item changes. Without a Gemini API key,
+  /// only previously cached suggestions are shown.
+  final bool aiAnalysis;
 
   /// Labels indicating that a PR or issue is waiting on the author's response.
   final Set<String> waitingForResponseLabels;

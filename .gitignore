@@ -1,5 +1,5 @@
 .dart_tool/
 pubspec.lock
 site/
-# Holds the GitHub token; see README.md.
+# Holds the GitHub token and Gemini API key; see README.md.
 .env

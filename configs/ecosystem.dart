@@ -21,18 +21,16 @@ const TriageConfig config = TriageConfig(
     'bkonyi',
     'bparrishMines',
     'camsim99',
-    'cbracken',
+    'chunhtai',
     'ditman',
     'dkwingsmt',
     'domesticmouse',
-    'elliette',
-    'flutter',
     'gmackall',
+    'hannah-hyj',
     'hellohuanlin',
     'Hixie',
     'jesswrd',
     'jtmcdole',
-    'loic-sharma',
     'LongCatIsLooong',
     'louisehsu',
     'mboetger',
@@ -40,12 +38,14 @@ const TriageConfig config = TriageConfig(
     'okorohelijah',
     'parlough',
     'Piinks',
-    'pjkammer',
     'qunccccccc',
+    'reidbaker',
     'robert-ancell',
     'sokoloff06',
+    'stuartmorgan-g',
     'tarrinneal',
     'vashworth',
+    'victorsanni',
     'yjbanov',
   ],
 
@@ -54,6 +54,10 @@ const TriageConfig config = TriageConfig(
   rosterFile: 'flutter/packages:SUGGESTED_REVIEWERS.md',
   hiddenLabels: <String>{'triage-design'},
   nonHiddenFilterLabel: 'triage-packages',
+
+  // Adds a short Gemini-generated next step to each PR and issue (except the
+  // "Other" issues section). Needs GEMINI_API_KEY; see README.md.
+  aiAnalysis: true,
 
   // Optional overrides:
   // issuesRepo: 'flutter/flutter',

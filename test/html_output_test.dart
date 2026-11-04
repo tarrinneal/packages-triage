@@ -87,30 +87,43 @@ void main() {
     expect(teamPageFileFor(File('/tmp/a.b/report')).path, '/tmp/a.b/report_team.html');
   });
 
-  test('writes linked community and team pages', () {
-    write(<PRAnalysis>[
-      _analysis(1),
-      _analysis(2, page: ReportPage.team),
-      _analysis(3, section: Section.needsReviewer),
-    ]);
-    final String community = communityFile.readAsStringSync();
-    final String team = teamPageFileFor(communityFile).readAsStringSync();
+  test(
+    'renders community and team PRs on the same page with both checkboxes checked by default',
+    () {
+      write(<PRAnalysis>[
+        _analysis(1),
+        _analysis(2, page: ReportPage.team),
+        _analysis(3, section: Section.needsReviewer),
+      ]);
+      final String community = communityFile.readAsStringSync();
+      final String issues = issuesPageFileFor(communityFile).readAsStringSync();
 
-    expect(community, contains('<meta charset="utf-8">'));
-    expect(community, contains('href="triage_team.html">Team PRs (1)</a>'));
-    expect(community, contains('<strong>Community PRs (2)</strong>'));
-    expect(community, contains('data-number="1"'));
-    expect(community, contains('data-number="3"'));
-    expect(community, isNot(contains('data-number="2"')));
-    expect(community, contains('id="needsReviewer"'));
-    expect(community, contains('Waiting on team'));
+      expect(community, contains('<meta charset="utf-8">'));
+      expect(community, contains('<strong>PRs (3)</strong>'));
+      expect(community, contains('href="triage_issues.html">Issues (0)</a>'));
+      expect(
+        community,
+        contains(
+          '<input id="show-community" type="checkbox" checked><span>Community PRs (2)</span>',
+        ),
+      );
+      expect(
+        community,
+        contains('<input id="show-team" type="checkbox" checked><span>Team PRs (1)</span>'),
+      );
+      expect(rowFor(community, 1), contains('data-page="community"'));
+      expect(rowFor(community, 1), isNot(contains(' hidden>')));
+      expect(rowFor(community, 2), contains('data-page="team"'));
+      expect(rowFor(community, 2), isNot(contains(' hidden>')));
+      expect(rowFor(community, 3), contains('data-page="community"'));
+      expect(rowFor(community, 3), isNot(contains(' hidden>')));
+      expect(community, contains('id="needsReviewer"'));
+      expect(community, contains('Waiting on team'));
 
-    expect(team, contains('href="triage.html">Community PRs (2)</a>'));
-    expect(team, contains('data-number="2"'));
-    expect(team, contains('Waiting on reviewer'));
-    expect(team, isNot(contains('id="needsReviewer"')));
-    expect(team, isNot(contains('id="bots"')));
-  });
+      expect(issues, contains('href="triage.html">PRs (3)</a>'));
+      expect(issues, contains('<strong>Issues (0)</strong>'));
+    },
+  );
 
   test('is well formed', () {
     write(<PRAnalysis>[_analysis(1), _analysis(2, section: Section.drafts)]);
@@ -209,9 +222,9 @@ void main() {
     expect(html, contains('class="banner"'));
     expect(html, contains('id="loadError"'));
     expect(html, contains('<p class="note">Partial report.</p>'));
-    final String team = teamPageFileFor(communityFile).readAsStringSync();
-    expect(team, isNot(contains('class="banner"')));
-    expect(team, isNot(contains('id="loadError"')));
+    final String issues = issuesPageFileFor(communityFile).readAsStringSync();
+    expect(issues, isNot(contains('class="banner"')));
+    expect(issues, isNot(contains('id="loadError"')));
   });
 
   group('report state', () {
@@ -310,6 +323,23 @@ void main() {
       expect(text, contains('Placement:  Community PRs › Waiting on team'));
       expect(text, contains('Next step:  Ping @reviewer'));
       expect(text, contains('    - Because'));
+      expect(text, isNot(contains('AI:')));
+    });
+
+    test('prints AI suggestions under their items', () {
+      final buffer = StringBuffer();
+      printTextReport(
+        'o/r',
+        <PRAnalysis>[_analysis(1), _analysis(2)],
+        aiSuggestions: const <String, String>{'https://github.com/o/r/pull/1': 'Ask @alice.'},
+        out: buffer,
+      );
+      expect(buffer.toString(), contains('    ✨ Ask @alice.\n    https://github.com/o/r/pull/1'));
+      expect('✨'.allMatches(buffer.toString()), hasLength(1));
+
+      final explanation = StringBuffer();
+      printExplanation(_analysis(1), aiSuggestion: 'Ask @alice.', out: explanation);
+      expect(explanation.toString(), contains('  AI:         ✨ Ask @alice.'));
     });
   });
 
@@ -698,5 +728,71 @@ void main() {
       expect(pageHtml, contains('Suggested Reviewers (from SUGGESTED_REVIEWERS.md)'));
       expect(pageHtml, contains('Auto-open GitHub'));
     }
+  });
+
+  test('shows AI suggestions under the next step, in the filter text, and in the legend', () {
+    final issue = IssueInfo(
+      number: 42,
+      author: 'reporter',
+      title: 'Camera crash on iOS',
+      url: 'https://github.com/flutter/flutter/issues/42',
+      creationDate: _now.subtract(const Duration(days: 12)),
+      updatedDate: _now,
+      authorType: ContributorType.community,
+      labels: const <String>['team-ecosystem', 'p: camera'],
+    )..hasDetails = true;
+    writeHtmlReport(
+      repo: 'o/r',
+      prs: <PRAnalysis>[_analysis(1), _analysis(2)],
+      issues: <IssueAnalysis>[
+        IssueAnalysis(
+          issue: issue,
+          section: IssueSection.untriaged,
+          waitingSince: issue.creationDate,
+          waitingDays: 12,
+          urgency: Urgency.due,
+          nextStep: 'Triage',
+          reasons: const <String>['Untriaged'],
+        ),
+      ],
+      communityFile: communityFile,
+      generatedAt: _now,
+      aiSuggestions: const <String, String>{
+        'https://github.com/o/r/pull/1': 'Ask <b>@alice</b> to "review".',
+        'https://github.com/flutter/flutter/issues/42': 'Set P2.',
+      },
+      aiModel: 'gemini-test',
+    );
+
+    final String community = communityFile.readAsStringSync();
+    expect(
+      rowFor(community, 1),
+      contains(
+        <String>[
+          '<td class="next"><span class="next-step">Ping @reviewer</span>',
+          '<div class="ai-next" title="AI-suggested next step. It can be wrong.">',
+          '✨ Ask &lt;b&gt;@alice&lt;/b&gt; to &quot;review&quot;.</div></td>',
+        ].join(),
+      ),
+    );
+    expect(rowFor(community, 1), contains('ask &lt;b&gt;@alice&lt;/b&gt; to &quot;review&quot;.'));
+    expect(
+      rowFor(community, 2),
+      contains('<td class="next"><span class="next-step">Ping @reviewer</span></td>'),
+    );
+    expect(community, contains('suggested by Gemini (<code>gemini-test</code>) for each PR'));
+
+    final String issuesHtml = issuesPageFileFor(communityFile).readAsStringSync();
+    expect(rowFor(issuesHtml, 42), contains('✨ Set P2.</div></td>'));
+    expect(issuesHtml, contains('suggested by Gemini (<code>gemini-test</code>) for each issue'));
+  });
+
+  test('has no AI legend entry without AI suggestions', () {
+    write(<PRAnalysis>[_analysis(1)]);
+    expect(communityFile.readAsStringSync(), isNot(contains('suggested by Gemini')));
+    expect(
+      issuesPageFileFor(communityFile).readAsStringSync(),
+      isNot(contains('suggested by Gemini')),
+    );
   });
 }

@@ -15,6 +15,7 @@ import 'utils.dart';
 /// page and section, followed by any actionable [issues].
 ///
 /// PRs with any of [hiddenLabels] are left out unless [showHidden] is true.
+/// [aiSuggestions], keyed by PR or issue URL, are printed under their items.
 void printTextReport(
   String repo,
   List<PRAnalysis> prs, {
@@ -24,6 +25,7 @@ void printTextReport(
   bool showHidden = false,
   TriageConfig config = const TriageConfig(),
   Map<int, PreviousPlacement>? previous,
+  Map<String, String> aiSuggestions = const <String, String>{},
   StringSink? out,
 }) {
   final Set<String> effectiveHiddenLabels = hiddenLabels ?? config.hiddenLabels;
@@ -44,7 +46,7 @@ void printTextReport(
       }
       sink.writeln(headingPen('${sectionTitle(section, page)} (${rows.length})'));
       for (final row in rows) {
-        _printRow(sink, row, previous);
+        _printRow(sink, row, previous, aiSuggestions[row.pr.url]);
       }
       sink.writeln();
     }
@@ -63,7 +65,7 @@ void printTextReport(
       }
       sink.writeln(headingPen('${issueSectionTitle(section, config: config)} (${rows.length})'));
       for (final row in rows) {
-        _printIssueRow(sink, row);
+        _printIssueRow(sink, row, aiSuggestions[row.issue.url]);
       }
       sink.writeln();
     }
@@ -77,7 +79,12 @@ void printTextReport(
   }
 }
 
-void _printRow(StringSink sink, PRAnalysis analysis, Map<int, PreviousPlacement>? previous) {
+void _printRow(
+  StringSink sink,
+  PRAnalysis analysis,
+  Map<int, PreviousPlacement>? previous,
+  String? aiSuggestion,
+) {
   final PRInfo pr = analysis.pr;
   final Badge? badge = badgeFor(analysis, previous);
   final String reviewers = reviewersText(pr);
@@ -92,11 +99,14 @@ void _printRow(StringSink sink, PRAnalysis analysis, Map<int, PreviousPlacement>
       '${analysis.isFollowUp ? ' [FOLLOW-UP]' : ''} ${pr.title} · '
       '${emojiForContributorType(pr.authorType)} ${pr.author}',
     )
-    ..writeln('    ${details.join(' · ')}')
-    ..writeln('    ${pr.url}');
+    ..writeln('    ${details.join(' · ')}');
+  if (aiSuggestion != null) {
+    sink.writeln('    ✨ $aiSuggestion');
+  }
+  sink.writeln('    ${pr.url}');
 }
 
-void _printIssueRow(StringSink sink, IssueAnalysis analysis) {
+void _printIssueRow(StringSink sink, IssueAnalysis analysis, String? aiSuggestion) {
   final IssueInfo issue = analysis.issue;
   final details = <String>[
     _penForUrgency(analysis.urgency, loadError: analysis.section == IssueSection.loadError)(
@@ -110,8 +120,11 @@ void _printIssueRow(StringSink sink, IssueAnalysis analysis) {
       '  #${issue.number}${analysis.isFollowUp ? ' [FOLLOW-UP]' : ''} ${issue.title} · '
       '${emojiForContributorType(issue.authorType)} ${issue.author}',
     )
-    ..writeln('    ${details.join(' · ')}')
-    ..writeln('    ${issue.url}');
+    ..writeln('    ${details.join(' · ')}');
+  if (aiSuggestion != null) {
+    sink.writeln('    ✨ $aiSuggestion');
+  }
+  sink.writeln('    ${issue.url}');
 }
 
 AnsiPen _penFor(PRAnalysis analysis) =>
@@ -130,8 +143,8 @@ AnsiPen _penForUrgency(Urgency urgency, {required bool loadError}) {
 }
 
 /// Prints everything the tool knows about [analysis]'s PR, and why it was
-/// placed where it was.
-void printExplanation(PRAnalysis analysis, {StringSink? out}) {
+/// placed where it was, including its [aiSuggestion] if there is one.
+void printExplanation(PRAnalysis analysis, {String? aiSuggestion, StringSink? out}) {
   final StringSink sink = out ?? stdout;
   final PRInfo pr = analysis.pr;
   final String reviewers = reviewersText(pr);
@@ -149,7 +162,11 @@ void printExplanation(PRAnalysis analysis, {StringSink? out}) {
       '  Waiting:    ${_penFor(analysis)(waitingLabel(analysis))} since '
       '${formatAsDay(analysis.waitingSince)} (${urgencyLabel(analysis.urgency)})',
     )
-    ..writeln('  Next step:  ${analysis.nextStep.isEmpty ? 'nothing yet' : analysis.nextStep}')
+    ..writeln('  Next step:  ${analysis.nextStep.isEmpty ? 'nothing yet' : analysis.nextStep}');
+  if (aiSuggestion != null) {
+    sink.writeln('  AI:         ✨ $aiSuggestion');
+  }
+  sink
     ..writeln('  Reviewers:  ${reviewers.isEmpty ? 'none' : reviewers}')
     ..writeln('  Labels:     ${pr.labels.isEmpty ? 'none' : pr.labels.join(', ')}');
   if (pr.hasDetails) {

@@ -131,16 +131,39 @@ PRs with new activity. Each time a run sees a PR open, changed or not, the PR's 
 for another 7 days; once a PR hasn't been seen open for 7 days (for example, because it was
 merged), its data is removed. Who counts as the team is still decided fresh on every run.
 
+## AI next-step suggestions
+
+Configs that set `aiAnalysis: true` (currently only [`configs/ecosystem.dart`](configs/ecosystem.dart))
+add a short ✨ suggestion under each item's **Next step**, written by the
+[Gemini API](https://ai.google.dev/gemini-api/docs) from the item's description, labels, reviews,
+and most recent comments. Every PR gets one, as does every issue except those in the **Other**
+section; items that failed to load are skipped. The triage companion shows the suggestion too.
+
+- **API key**: Create a key in [Google AI Studio](https://aistudio.google.com/apikey), then add a
+  `GEMINI_API_KEY=...` line to the same `.env` file as the GitHub token (or set the
+  `GEMINI_API_KEY` environment variable). For the hosted pages, add it as a repository secret named
+  `GEMINI_API_KEY` (**Settings → Secrets and variables → Actions**) on the Pages repository.
+- **Model**: `gemini-3.5-flash-lite` by default; set `GEMINI_MODEL` the same way to use another.
+- **Caching**: Suggestions are saved as `ai_<config>.json` in the cache directory above and reused
+  until the item's `updated_at` changes, so each run only asks Gemini about PRs and issues with
+  new activity. Changing the model or the prompt (`aiPromptVersion` in `lib/ai.dart`) regenerates
+  them.
+- Without a key, or with `--no-ai`, the report is built as usual and shows only cached
+  suggestions. If Gemini rejects the key or runs out of quota, the run finishes without the
+  remaining suggestions, and they're retried on the next run.
+
 ## Other options
 
-- `--pr <number>`: Explain how a single PR is triaged, and why. This always fetches fresh data.
+- `--pr <number>`: Explain how a single PR is triaged, and why. This always fetches fresh data, and
+  includes the AI suggestion when the config has `aiAnalysis: true`.
 - `--limit <n>`: Only analyze the `n` newest open PRs, for quick checks. This also works without a
   token, within GitHub's limit of 60 requests per hour.
 - `--refresh`: Fetch every PR's comments and reviews again instead of reusing saved ones.
+- `--no-ai`: Don't call Gemini; only show AI suggestions that are already cached.
 - `--record <file>` / `--replay <file>`: Save every GitHub response, then rerun from the saved
   responses without calling GitHub, which is useful when changing the sorting or the output. Replay
   with the same `--limit` or `--pr` that was recorded. Recording fetches everything rather than
-  using the cache, and replays leave the cache alone.
+  using the cache, and replays leave the cache alone (and don't call Gemini).
 
 Run `dart run bin/pr_inspector.dart --help` for everything else.
 

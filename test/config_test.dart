@@ -37,6 +37,26 @@ void main() {
       expect(parsed.highPriorityLabels, defaultConfig.highPriorityLabels);
     });
 
+    test('aiAnalysis is off by default and only enabled for ecosystem', () {
+      expect(const TriageConfig().aiAnalysis, isFalse);
+      expect(
+        parseDartConfig('const TriageConfig config = TriageConfig(aiAnalysis: true);').aiAnalysis,
+        isTrue,
+      );
+      expect(
+        () => parseDartConfig("const TriageConfig config = TriageConfig(aiAnalysis: 'yes');"),
+        throwsFormatException,
+      );
+      final Map<String, TriageConfig> configs = loadConfigsDirectory(Directory('configs'));
+      expect(
+        <String>[
+          for (final MapEntry<String, TriageConfig> entry in configs.entries)
+            if (entry.value.aiAnalysis) entry.key,
+        ],
+        <String>['ecosystem'],
+      );
+    });
+
     test(
       'flutterTeam auto-derives team-*, fyi-*, and triaged-* labels and defaults rosterFile to null for other teams',
       () {

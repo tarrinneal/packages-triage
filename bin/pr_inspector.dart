@@ -5,6 +5,7 @@
 import 'dart:io';
 
 import 'package:args/args.dart';
+import 'package:pr_inspector/ai.dart';
 import 'package:pr_inspector/detail_cache.dart';
 import 'package:pr_inspector/github_client.dart';
 import 'package:pr_inspector/html_output.dart';
@@ -22,6 +23,11 @@ class _UsageException implements Exception {
 
   final String message;
 }
+
+/// How AI next-step suggestions are generated in this run: by [gemini] with
+/// [model], or, if [gemini] is null, only from the cache, because of
+/// [unavailableReason].
+typedef _AiSettings = ({GeminiClient? gemini, String model, String? unavailableReason});
 
 Future<void> main(List<String> arguments) async {
   const TriageConfig config = defaultConfig;
@@ -65,6 +71,13 @@ Future<void> main(List<String> arguments) async {
       help:
           'Show PRs labeled ${config.hiddenLabels.join(', ')} by default. '
           '(The HTML report always has a button to show them.)',
+    )
+    ..addFlag(
+      'ai',
+      defaultsTo: true,
+      help:
+          'Generate Gemini next-step suggestions for configs with aiAnalysis: true, using the '
+          '$geminiApiKeyVariable key. With --no-ai, only previously cached suggestions are shown.',
     )
     ..addOption('limit', help: 'Only analyze the <n> newest open PRs, for quick checks.')
     ..addFlag(
@@ -211,6 +224,38 @@ Future<void> _run(ArgResults results, String usage, File envFile, List<File> env
     token: token?.value ?? '',
     replayFile: replayPath == null ? null : File(replayPath),
   );
+  final String? geminiKey =
+      readConfigValue(
+        environment: Platform.environment,
+        envFiles: envFiles,
+        key: geminiApiKeyVariable,
+      ) ??
+      readConfigValue(
+        environment: Platform.environment,
+        envFiles: envFiles,
+        key: googleApiKeyVariable,
+      );
+  final String aiModel =
+      readConfigValue(
+        environment: Platform.environment,
+        envFiles: envFiles,
+        key: geminiModelVariable,
+      ) ??
+      defaultAiModel;
+  final String? unavailableReason = !results.flag('ai')
+      ? '--no-ai was passed'
+      : replayPath != null
+      ? 'this run replays a recording'
+      : geminiKey == null
+      ? 'no $geminiApiKeyVariable was found'
+      : null;
+  final _AiSettings ai = (
+    gemini: geminiKey != null && unavailableReason == null
+        ? GeminiClient(apiKey: geminiKey, model: aiModel)
+        : null,
+    model: aiModel,
+    unavailableReason: unavailableReason,
+  );
   final stopwatch = Stopwatch()..start();
   try {
     final TriageConfig primaryConfig = configs.values.first;
@@ -228,6 +273,8 @@ Future<void> _run(ArgResults results, String usage, File envFile, List<File> env
         prNumber,
         requiredApprovals: usesConfiguredRepos ? primaryConfig.requiredApprovals : 1,
         config: primaryConfig,
+        ai: usesConfiguredRepos && primaryConfig.aiAnalysis ? ai : null,
+        configName: configs.keys.first,
       );
     } else if (results.rest.isNotEmpty || hasExplicitConfig || htmlPath == null) {
       // Single report run (explicit CLI repos, explicit --config file, or text output).
@@ -251,6 +298,7 @@ Future<void> _run(ArgResults results, String usage, File envFile, List<File> env
         usesConfiguredRepos: usesConfiguredRepos,
         config: primaryConfig,
         activeConfigName: configs.keys.first,
+        ai: usesConfiguredRepos && primaryConfig.aiAnalysis ? ai : null,
         live: replayPath == null,
         refresh: refresh,
       );
@@ -320,6 +368,7 @@ Future<void> _run(ArgResults results, String usage, File envFile, List<File> env
           activeConfigName: configName,
           configLinks: subLinks,
           mirrorRootConfigLinks: rootLinks,
+          ai: config.aiAnalysis ? ai : null,
           live: replayPath == null,
           refresh: refresh,
         );
@@ -348,6 +397,13 @@ Future<void> _run(ArgResults results, String usage, File envFile, List<File> env
         '${(stopwatch.elapsedMilliseconds / 1000).toStringAsFixed(1)}s$remaining.',
       );
     }
+    final GeminiClient? gemini = ai.gemini;
+    if (gemini != null) {
+      gemini.close();
+      if (gemini.requestCount > 0) {
+        stderr.writeln('Made ${gemini.requestCount} Gemini requests.');
+      }
+    }
   }
 }
 
@@ -365,12 +421,80 @@ int? _positiveInt(ArgResults results, String name) {
 
 void _warn(String message) => stderr.writeln('Warning: $message');
 
+/// Returns AI next-step suggestions for [prs] and [issues] in config
+/// [configName], keyed by URL, reusing cached ones and generating the rest
+/// with [ai] if Gemini is available.
+Future<Map<String, String>> _aiSuggestions(
+  GitHubClient github,
+  _AiSettings ai,
+  List<PRAnalysis> prs,
+  List<IssueAnalysis> issues, {
+  required String configName,
+  required Set<String> roster,
+  required TriageConfig config,
+  required DateTime now,
+}) async {
+  final cache = AiSuggestionCache.load(
+    aiSuggestionCacheFileFor(configName),
+    now: now,
+    onWarning: _warn,
+  );
+  final GeminiClient? gemini = ai.gemini;
+  final bool interactive = stderr.hasTerminal;
+  final AiSuggestionResult result = await generateAiSuggestions(
+    prs: prs,
+    issues: issues,
+    cache: cache,
+    model: ai.model,
+    now: now,
+    gemini: gemini,
+    github: github,
+    roster: roster,
+    config: config,
+    onStart: (int pending, int reused) => stderr.writeln(
+      'Generating AI next steps with ${ai.model} for $pending items '
+      '($reused reused from the cache)...',
+    ),
+    onProgress: (int done, int total) {
+      if (interactive) {
+        stderr.write('\r[$done/$total] AI next steps   ');
+        if (done == total) {
+          stderr.writeln();
+        }
+      } else if (done % 25 == 0 || done == total) {
+        stderr.writeln('[$done/$total] AI next steps');
+      }
+    },
+    onWarning: _warn,
+  );
+  if (gemini == null) {
+    stderr.writeln(
+      'AI next steps are on for "$configName", but ${ai.unavailableReason ?? 'Gemini is unavailable'}, '
+      'so only the ${result.reused} cached suggestions are shown.',
+    );
+    return result.suggestions;
+  }
+  try {
+    cache.save();
+  } on FileSystemException catch (e) {
+    _warn('Could not save AI suggestions to ${cache.file.path}: ${e.message}');
+  }
+  stderr.writeln(
+    'AI next steps: ${result.generated} generated, ${result.reused} reused'
+    '${result.failed > 0 ? ', ${result.failed} failed' : ''}'
+    '${result.skipped > 0 ? ', ${result.skipped} skipped' : ''}.',
+  );
+  return result.suggestions;
+}
+
 Future<void> _explainPR(
   GitHubClient client,
   String repo,
   int number, {
   required int requiredApprovals,
   required TriageConfig config,
+  required _AiSettings? ai,
+  required String configName,
 }) async {
   stderr.writeln('Fetching PR #$number in $repo...');
   final Map<String, dynamic> listing = await fetchSinglePR(client, repo, number);
@@ -389,9 +513,25 @@ Future<void> _explainPR(
     alwaysFetchDetails: true,
     config: config,
   );
-  printExplanation(
-    analyzePR(pr, now: client.now, requiredApprovals: requiredApprovals, config: config),
+  final PRAnalysis analysis = analyzePR(
+    pr,
+    now: client.now,
+    requiredApprovals: requiredApprovals,
+    config: config,
   );
+  final Map<String, String> aiSuggestions = ai == null
+      ? const <String, String>{}
+      : await _aiSuggestions(
+          client,
+          ai,
+          <PRAnalysis>[analysis],
+          const <IssueAnalysis>[],
+          configName: configName,
+          roster: roster,
+          config: config,
+          now: client.now,
+        );
+  printExplanation(analysis, aiSuggestion: aiSuggestions[pr.url]);
 }
 
 Future<void> _report(
@@ -413,6 +553,7 @@ Future<void> _report(
   List<({String name, String dirPrefix})> configLinks = const <({String name, String dirPrefix})>[],
   List<({String name, String dirPrefix})> mirrorRootConfigLinks =
       const <({String name, String dirPrefix})>[],
+  required _AiSettings? ai,
   required bool live,
   required bool refresh,
 }) async {
@@ -580,6 +721,19 @@ Future<void> _report(
     }
   }
 
+  final Map<String, String> aiSuggestions = ai == null
+      ? const <String, String>{}
+      : await _aiSuggestions(
+          client,
+          ai,
+          analyses,
+          issueAnalyses,
+          configName: activeConfigName ?? 'default',
+          roster: roster,
+          config: config,
+          now: now,
+        );
+
   final String repoLabel = repos.join(' + ');
   if (htmlFile == null) {
     printTextReport(
@@ -590,6 +744,7 @@ Future<void> _report(
       hiddenLabels: hiddenLabels,
       showHidden: showHidden,
       config: config,
+      aiSuggestions: aiSuggestions,
     );
   } else {
     void writeTargetHtml(File targetFile, List<({String name, String dirPrefix})> links) {
@@ -615,6 +770,8 @@ Future<void> _report(
         config: config,
         activeConfigName: activeConfigName,
         configLinks: links,
+        aiSuggestions: aiSuggestions,
+        aiModel: ai?.model,
         note: <String>[
           if (limit != null) 'Partial report: only the $limit newest open PRs were analyzed.',
           if (!live) 'Replayed from a recording made ${formatAsMinute(now)}.',

@@ -341,6 +341,7 @@ PRInfo prInfoFromListing(
           in (pr['labels'] as List<dynamic>? ?? const <dynamic>[]).cast<Map<String, dynamic>>())
         label['name']! as String,
     ],
+    body: pr['body'] as String? ?? '',
   );
 }
 
@@ -571,6 +572,7 @@ IssueInfo issueInfoFromListing(
         assignee['login']! as String,
     ],
     commentCount: issue['comments'] as int? ?? -1,
+    body: issue['body'] as String? ?? '',
   );
 }
 

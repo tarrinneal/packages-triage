@@ -134,6 +134,7 @@ jobs:
         if: steps.tz_check.outputs.should_run == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           TZ: America/Los_Angeles
           EVENT_NAME: ${{ github.event_name }}
           EVENT_SCHEDULE: ${{ github.event.schedule }}
