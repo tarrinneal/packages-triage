@@ -264,7 +264,7 @@ const TriageConfig config = TriageConfig(
 
         final TriageConfig reparsed = parseDartConfig(updated);
         expect(reparsed.teamMembers, <String>['bparrishMines', 'camsim99', 'Hixie']);
-        expect(reparsed.refreshSchedule, '37 19 * * 2');
+        expect(reparsed.refreshSchedule, '57 * * * *');
       },
     );
 
@@ -281,7 +281,7 @@ on:
         'ecosystem': TriageConfig(),
         'ios': TriageConfig(flutterTeam: 'ios', refreshSchedule: '0 17 * * 4'),
       });
-      expect(synced, contains("- cron: '37 19 * * 2' # ecosystem"));
+      expect(synced, contains("- cron: '57 * * * *' # ecosystem"));
       expect(synced, contains("- cron: '0 17 * * 4' # ios"));
     });
 
@@ -312,7 +312,7 @@ on:
       for (final MapEntry<String, TriageConfig> entry in configs.entries) {
         expect(entry.value.repos, isNotEmpty, reason: '${entry.key} repos');
         expect(entry.value.flutterTeam, isNotNull, reason: '${entry.key} flutterTeam');
-        expect(entry.value.refreshSchedule, isNotNull, reason: '${entry.key} refreshSchedule');
+        expect(entry.value.refreshSchedule, '57 * * * *', reason: '${entry.key} refreshSchedule');
         expect(entry.value.teamMembers, isNotEmpty, reason: '${entry.key} teamMembers');
       }
       expect(configs['design']!.hiddenLabels, isEmpty);

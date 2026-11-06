@@ -14,7 +14,7 @@ import 'package:pr_inspector/types.dart';
 const TriageConfig config = TriageConfig(
   repos: <String>['flutter/flutter', 'flutter/buildroot'],
   flutterTeam: 'engine',
-  refreshSchedule: '0 17 * * 2',
+  refreshSchedule: '57 * * * *',
   prLabels: <String>{'engine', 'team-engine', 'fyi-engine'},
   teamMembers: <String>[
     'chinmaygarde',

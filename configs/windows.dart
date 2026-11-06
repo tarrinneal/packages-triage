@@ -14,7 +14,7 @@ import 'package:pr_inspector/types.dart';
 const TriageConfig config = TriageConfig(
   repos: <String>['flutter/flutter', 'flutter/packages'],
   flutterTeam: 'windows',
-  refreshSchedule: '30 19 * * 2',
+  refreshSchedule: '57 * * * *',
   prLabels: <String>{'platform-windows', 'team-windows', 'fyi-windows', 'triage-windows'},
   teamMembers: <String>['cbracken', 'loic-sharma', 'stuartmorgan-g'],
 );

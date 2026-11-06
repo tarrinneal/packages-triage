@@ -459,18 +459,16 @@ void main() {
     expect(rowFor(html, 202), contains('<span class="label repo-label">core-packages</span>'));
   });
 
-  test('renders refresh report button with 5-minute cooldown metadata on all pages', () {
+  test('omits manual refresh report button and token prompt on all pages', () {
     write(<PRAnalysis>[_analysis(1)]);
     final String community = communityFile.readAsStringSync();
     final String team = teamPageFileFor(communityFile).readAsStringSync();
     final String issues = issuesPageFileFor(communityFile).readAsStringSync();
 
     for (final pageHtml in <String>[community, team, issues]) {
-      expect(pageHtml, contains('id="refresh-report"'));
-      expect(pageHtml, contains('>↻ Refresh report</button>'));
+      expect(pageHtml, isNot(contains('id="refresh-report"')));
+      expect(pageHtml, isNot(contains('Enter a GitHub token')));
       expect(pageHtml, contains('data-generated-at="2026-10-01T12:00:00.000Z"'));
-      expect(pageHtml, contains('data-workflow-repo="tarrinneal/packages-triage"'));
-      expect(pageHtml, contains('const cooldownMs = 5 * 60 * 1000;'));
     }
   });
 

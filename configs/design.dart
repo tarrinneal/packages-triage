@@ -15,7 +15,7 @@ import 'package:pr_inspector/types.dart';
 const TriageConfig config = TriageConfig(
   repos: <String>['flutter/flutter', 'flutter/packages'],
   flutterTeam: 'design',
-  refreshSchedule: '30 16 * * 2',
+  refreshSchedule: '57 * * * *',
   prLabels: <String>{
     'f: cupertino',
     'f: material design',

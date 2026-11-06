@@ -14,7 +14,7 @@ import 'package:pr_inspector/types.dart';
 const TriageConfig config = TriageConfig(
   repos: <String>['flutter/flutter'],
   flutterTeam: 'text-input',
-  refreshSchedule: '45 18 * * 2',
+  refreshSchedule: '57 * * * *',
   prLabels: <String>{'a: text input', 'f: selection', 'team-text-input', 'fyi-text-input'},
   teamMembers: <String>['justinmc', 'LongCatIsLooong', 'Renzo-Olivares'],
 );

@@ -118,6 +118,10 @@ class GitHubClient {
       }
       return _checked(url, response);
     }
+    final GitHubResponse? cached = _recorded[key];
+    if (cached != null) {
+      return _checked(url, cached);
+    }
 
     for (var attempt = 0; ; attempt++) {
       final http.Response response;

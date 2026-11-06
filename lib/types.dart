@@ -397,9 +397,9 @@ class IssueAnalysis {
 /// Default repositories inspected when none are passed on the command line.
 const List<String> defaultRepos = <String>['flutter/packages', 'flutter/core-packages'];
 
-/// Default weekly cron expression (`'37 19 * * 2'`) used to refresh a page's
-/// report in GitHub Actions.
-const String defaultRefreshSchedule = '37 19 * * 2';
+/// Default hourly cron expression (`'57 * * * *'`, 3 minutes before the hour)
+/// used to refresh a page's report in GitHub Actions.
+const String defaultRefreshSchedule = '57 * * * *';
 
 /// Default repository where issues are tracked for [defaultRepos].
 const String defaultIssuesRepo = 'flutter/flutter';

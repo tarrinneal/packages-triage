@@ -346,8 +346,6 @@ $_css</style>
       ..writeln(
         '<button id="open-companion" type="button" title="Open an always-on-top floating window with the active row&#39;s triage details">🪟 Triage companion</button>',
       )
-      ..writeln('<button id="refresh-report" type="button">↻ Refresh report</button>')
-      ..writeln('<span id="refresh-status" class="refresh-status" aria-live="polite"></span>')
       ..writeln('</div>')
       ..writeln(
         '<input id="filter" type="search" placeholder="Filter by number, title, author, label, reviewer, or next step" autocomplete="off">',
@@ -660,8 +658,6 @@ $_css</style>
 <button id="toggle-followup" type="button" aria-pressed="false"${followUpCount == 0 ? ' disabled' : ''}>Follow-up issues ($followUpCount)</button>
 <label class="filter-chip"><input id="hide-waiting-response" type="checkbox" checked><span>Hide waiting-for-response ($waitingResponseCount)</span></label>
 <button id="open-companion" type="button" title="Open an always-on-top floating window with the active row&#39;s triage details">🪟 Triage companion</button>
-<button id="refresh-report" type="button">↻ Refresh report</button>
-<span id="refresh-status" class="refresh-status" aria-live="polite"></span>
 </div>
 <input id="filter" type="search" placeholder="Filter by number, title, author, label, assignee, or next step" autocomplete="off">
 ''');
@@ -1430,10 +1426,6 @@ const String _css = r'''
   }
   .legend ul { margin: 0; padding-left: 18px; }
   .legend li { margin: 4px 0; }
-  .refresh-status {
-    font-size: 0.82rem;
-    color: var(--muted);
-  }
   .filter-group {
     display: inline-flex;
     align-items: center;
@@ -1709,9 +1701,6 @@ const String _script = r'''
   const designStorageKey = 'prTriage.showDesign';
   const waitingResponseStorageKey = 'prTriage.hideWaitingForResponse';
   const companionAutoOpenStorageKey = 'prTriage.companionAutoOpen';
-  const tokenStorageKey = 'prTriage.githubToken';
-  const lastRunStorageKey = 'prTriage.lastWorkflowRunAt';
-  const cooldownMs = 5 * 60 * 1000;
   const filter = document.getElementById('filter');
   const showCommunityCheckbox = document.getElementById('show-community');
   const showTeamCheckbox = document.getElementById('show-team');
@@ -1721,8 +1710,6 @@ const String _script = r'''
   const hideWaitingCheckbox = document.getElementById('hide-waiting-response');
   const openCompanionButton = document.getElementById('open-companion');
   const companionDock = document.getElementById('triage-companion-dock');
-  const refreshButton = document.getElementById('refresh-report');
-  const refreshStatus = document.getElementById('refresh-status');
   const rows = Array.from(document.querySelectorAll('tbody tr[data-number]'));
   const sections = Array.from(document.querySelectorAll('details[data-section]'));
   const showHiddenDefault = body.dataset.showHiddenDefault === 'true';
@@ -2440,199 +2427,6 @@ const String _script = r'''
       }
       update();
     });
-  }
-
-  if (refreshButton) {
-    const hostMatch = window.location.hostname.match(/^([^.]+)\.github\.io$/);
-    const pathSeg = window.location.pathname.split('/').filter(Boolean)[0];
-    const workflowRepo = (hostMatch && pathSeg)
-        ? `${hostMatch[1]}/${pathSeg}`
-        : (body.dataset.workflowRepo || 'tarrinneal/packages-triage');
-    const runsApiUrl = `https://api.github.com/repos/${workflowRepo}/actions/workflows/deploy_pages.yml/runs?per_page=10`;
-    const dispatchApiUrl = `https://api.github.com/repos/${workflowRepo}/actions/workflows/deploy_pages.yml/dispatches`;
-    const actionsHtmlUrl = `https://github.com/${workflowRepo}/actions/workflows/deploy_pages.yml`;
-
-    let lastRunTimeMs = Date.parse(body.dataset.generatedAt || '') || 0;
-    try {
-      const savedLastRun = Number(localStorage.getItem(lastRunStorageKey));
-      if (savedLastRun > lastRunTimeMs) {
-        lastRunTimeMs = savedLastRun;
-      }
-    } catch (e) {
-      // Ignore storage errors.
-    }
-    let runInProgress = false;
-    let pollTimer = null;
-
-    function formatRemaining(ms) {
-      const totalSec = Math.max(1, Math.ceil(ms / 1000));
-      const min = Math.floor(totalSec / 60);
-      const sec = totalSec % 60;
-      return min > 0 ? `${min}m ${String(sec).padStart(2, '0')}s` : `${sec}s`;
-    }
-
-    function syncRefreshButton() {
-      if (runInProgress) {
-        refreshButton.disabled = true;
-        refreshButton.textContent = '↻ Running action…';
-        refreshButton.title = 'GitHub Action is currently running.';
-        return;
-      }
-      const elapsed = Date.now() - lastRunTimeMs;
-      if (lastRunTimeMs > 0 && elapsed < cooldownMs) {
-        refreshButton.disabled = true;
-        refreshButton.textContent = `↻ Refresh in ${formatRemaining(cooldownMs - elapsed)}`;
-        refreshButton.title = 'Action can only be run at least 5 minutes after the last run.';
-      } else {
-        refreshButton.disabled = false;
-        refreshButton.textContent = '↻ Refresh report';
-        refreshButton.title = 'Trigger the GitHub Action to rebuild and deploy this report.';
-      }
-    }
-
-    async function checkWorkflowRuns() {
-      try {
-        const res = await fetch(runsApiUrl, {
-          headers: { 'Accept': 'application/vnd.github+json' },
-          cache: 'no-store',
-        });
-        if (!res.ok) {
-          return;
-        }
-        const data = await res.json();
-        const runs = Array.isArray(data.workflow_runs) ? data.workflow_runs : [];
-        const activeRun = runs.find((r) => r.status !== 'completed');
-        if (activeRun) {
-          runInProgress = true;
-          const startedMs = Date.parse(activeRun.run_started_at || activeRun.created_at || '') || Date.now();
-          if (startedMs > lastRunTimeMs) {
-            lastRunTimeMs = startedMs;
-          }
-          if (!pollTimer) {
-            pollTimer = setInterval(async () => {
-              await checkWorkflowRuns();
-              if (!runInProgress) {
-                clearInterval(pollTimer);
-                pollTimer = null;
-                window.location.reload();
-              }
-            }, 10000);
-          }
-        } else {
-          runInProgress = false;
-        }
-        for (const run of runs) {
-          if (run.conclusion !== 'success') {
-            continue;
-          }
-          const started = Date.parse(run.run_started_at || run.created_at || '') || 0;
-          const updated = Date.parse(run.updated_at || '') || 0;
-          if (updated - started < 20000) {
-            continue;
-          }
-          if (updated > lastRunTimeMs) {
-            lastRunTimeMs = updated;
-            try {
-              localStorage.setItem(lastRunStorageKey, String(lastRunTimeMs));
-            } catch (e) {
-              // Ignore storage errors.
-            }
-          }
-          break;
-        }
-      } catch (e) {
-        // Ignore network errors during background status check.
-      }
-      syncRefreshButton();
-    }
-
-    refreshButton.addEventListener('click', async () => {
-      await checkWorkflowRuns();
-      if (runInProgress || (lastRunTimeMs > 0 && Date.now() - lastRunTimeMs < cooldownMs)) {
-        syncRefreshButton();
-        return;
-      }
-      let token = null;
-      try {
-        token = localStorage.getItem(tokenStorageKey);
-      } catch (e) {
-        // Ignore storage errors.
-      }
-      if (!token) {
-        const input = window.prompt(
-          `Enter a GitHub token with Actions write permission for ${workflowRepo} (saved in localStorage):`
-        );
-        if (!input || !input.trim()) {
-          return;
-        }
-        token = input.trim();
-        try {
-          localStorage.setItem(tokenStorageKey, token);
-        } catch (e) {
-          // Ignore storage errors.
-        }
-      }
-      refreshButton.disabled = true;
-      refreshButton.textContent = '↻ Starting…';
-      if (refreshStatus) {
-        refreshStatus.textContent = '';
-      }
-      try {
-        const configName = body.dataset.configName || '';
-        const dispatchPayload = configName
-            ? { ref: 'main', inputs: { config: configName } }
-            : { ref: 'main' };
-        const res = await fetch(dispatchApiUrl, {
-          method: 'POST',
-          headers: {
-            'Accept': 'application/vnd.github+json',
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(dispatchPayload),
-        });
-        if (res.status === 401 || res.status === 403) {
-          try {
-            localStorage.removeItem(tokenStorageKey);
-          } catch (e) {
-            // Ignore storage errors.
-          }
-          if (refreshStatus) {
-            refreshStatus.textContent = `Token rejected (needs Actions write access on ${workflowRepo}). Click again to enter a new token.`;
-          }
-          syncRefreshButton();
-          return;
-        }
-        if (!res.ok) {
-          if (refreshStatus) {
-            refreshStatus.textContent = `Failed to start workflow (HTTP ${res.status}).`;
-          }
-          syncRefreshButton();
-          return;
-        }
-        lastRunTimeMs = Date.now();
-        try {
-          localStorage.setItem(lastRunStorageKey, String(lastRunTimeMs));
-        } catch (e) {
-          // Ignore storage errors.
-        }
-        runInProgress = true;
-        if (refreshStatus) {
-          refreshStatus.innerHTML = `Workflow triggered — <a href="${actionsHtmlUrl}" target="_blank" rel="noopener">view on GitHub Actions</a>`;
-        }
-        syncRefreshButton();
-        setTimeout(checkWorkflowRuns, 4000);
-      } catch (e) {
-        if (refreshStatus) {
-          refreshStatus.textContent = 'Network error triggering workflow.';
-        }
-        syncRefreshButton();
-      }
-    });
-
-    syncRefreshButton();
-    setInterval(syncRefreshButton, 1000);
-    checkWorkflowRuns();
   }
 
   for (const header of document.querySelectorAll('th[data-sort]')) {

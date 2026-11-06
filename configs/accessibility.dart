@@ -14,7 +14,7 @@ import 'package:pr_inspector/types.dart';
 const TriageConfig config = TriageConfig(
   repos: <String>['flutter/flutter'],
   flutterTeam: 'accessibility',
-  refreshSchedule: '0 16 * * 2',
+  refreshSchedule: '57 * * * *',
   prLabels: <String>{'a: accessibility', 'team-accessibility', 'fyi-accessibility'},
   teamMembers: <String>['chunhtai', 'hangyujin'],
 );

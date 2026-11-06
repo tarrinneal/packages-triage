@@ -14,6 +14,6 @@ import 'package:pr_inspector/types.dart';
 const TriageConfig config = TriageConfig(
   repos: <String>['flutter/cocoon'],
   flutterTeam: 'infra',
-  refreshSchedule: '45 17 * * 2',
+  refreshSchedule: '57 * * * *',
   teamMembers: <String>['jtmcdole', 'keyonghan', 'matanlurey'],
 );

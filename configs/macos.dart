@@ -14,7 +14,7 @@ import 'package:pr_inspector/types.dart';
 const TriageConfig config = TriageConfig(
   repos: <String>['flutter/flutter', 'flutter/packages'],
   flutterTeam: 'macos',
-  refreshSchedule: '30 18 * * 2',
+  refreshSchedule: '57 * * * *',
   prLabels: <String>{'platform-macos', 'team-macos', 'fyi-macos', 'triage-macos'},
   teamMembers: <String>[
     'cbracken',
