@@ -189,6 +189,11 @@ Future<void> _run(ArgResults results, String usage, File envFile, List<File> env
     envFiles: envFiles,
     key: 'GITHUB_REPOSITORY',
   );
+  final String? envRefreshEndpoint = readConfigValue(
+    environment: Platform.environment,
+    envFiles: envFiles,
+    key: 'REFRESH_ENDPOINT',
+  );
   if (results.flag('open') && htmlPath == null) {
     throw _UsageException('--open requires --html.');
   }
@@ -295,6 +300,7 @@ Future<void> _run(ArgResults results, String usage, File envFile, List<File> env
         requiredApprovals: usesConfiguredRepos ? primaryConfig.requiredApprovals : 1,
         includeIssues: includeIssues,
         workflowRepo: envWorkflowRepo ?? primaryConfig.workflowRepo,
+        refreshEndpoint: envRefreshEndpoint ?? primaryConfig.refreshEndpoint,
         usesConfiguredRepos: usesConfiguredRepos,
         config: primaryConfig,
         activeConfigName: configs.keys.first,
@@ -363,6 +369,7 @@ Future<void> _run(ArgResults results, String usage, File envFile, List<File> env
           requiredApprovals: config.requiredApprovals,
           includeIssues: includeIssues,
           workflowRepo: envWorkflowRepo ?? config.workflowRepo,
+          refreshEndpoint: envRefreshEndpoint ?? config.refreshEndpoint,
           usesConfiguredRepos: true,
           config: config,
           activeConfigName: configName,
@@ -547,6 +554,7 @@ Future<void> _report(
   required int requiredApprovals,
   required bool includeIssues,
   required String workflowRepo,
+  String? refreshEndpoint,
   required bool usesConfiguredRepos,
   required TriageConfig config,
   String? activeConfigName,
@@ -765,6 +773,7 @@ Future<void> _report(
         showHiddenByDefault: showHidden,
         showAllLabels: showAllLabels,
         workflowRepo: workflowRepo,
+        refreshEndpoint: refreshEndpoint,
         teamLabel: effectiveTeamLabel,
         fyiLabel: effectiveFyiLabel,
         config: config,

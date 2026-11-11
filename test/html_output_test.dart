@@ -793,4 +793,28 @@ void main() {
       isNot(contains('suggested by Gemini')),
     );
   });
+
+  test('renders refresh report button without token prompt when refreshEndpoint is configured', () {
+    writeHtmlReport(
+      repo: 'o/r',
+      prs: <PRAnalysis>[_analysis(1)],
+      communityFile: communityFile,
+      generatedAt: _now,
+      workflowRepo: 'acme/triage',
+      refreshEndpoint: 'https://refresh-abc.a.run.app',
+      activeConfigName: 'ecosystem',
+    );
+    final String community = communityFile.readAsStringSync();
+    final String team = teamPageFileFor(communityFile).readAsStringSync();
+    final String issues = issuesPageFileFor(communityFile).readAsStringSync();
+
+    for (final pageHtml in <String>[community, team, issues]) {
+      expect(pageHtml, contains('data-refresh-endpoint="https://refresh-abc.a.run.app"'));
+      expect(pageHtml, contains('id="refresh-report"'));
+      expect(pageHtml, contains('id="refreshed-at"'));
+      expect(pageHtml, contains('Refreshed at <time datetime="2026-10-01T12:00:00.000Z">'));
+      expect(pageHtml, contains('id="refresh-status"'));
+      expect(pageHtml, isNot(contains('Enter a GitHub token')));
+    }
+  });
 }

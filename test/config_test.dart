@@ -343,5 +343,27 @@ on:
       expect(filtered, hasLength(1));
       expect(filtered.single['number'], 1);
     });
+
+    test('parses and validates refreshEndpoint', () {
+      expect(const TriageConfig().refreshEndpoint, isNull);
+      expect(
+        parseDartConfig(
+          "const TriageConfig config = TriageConfig(refreshEndpoint: 'https://refresh-abc.a.run.app');",
+        ).refreshEndpoint,
+        'https://refresh-abc.a.run.app',
+      );
+      expect(
+        parseDartConfig(
+          "const TriageConfig config = TriageConfig(refreshEndpoint: '');",
+        ).refreshEndpoint,
+        isNull,
+      );
+      expect(
+        () => parseDartConfig(
+          "const TriageConfig config = TriageConfig(refreshEndpoint: 'not-a-url');",
+        ),
+        throwsFormatException,
+      );
+    });
   });
 }

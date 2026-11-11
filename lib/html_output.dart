@@ -60,6 +60,7 @@ void writeHtmlReport({
   bool showHiddenByDefault = false,
   bool? showAllLabels,
   String? workflowRepo,
+  String? refreshEndpoint,
   String? teamLabel = _unsetReportLabel,
   String? fyiLabel = _unsetReportLabel,
   TriageConfig config = const TriageConfig(),
@@ -72,6 +73,9 @@ void writeHtmlReport({
   final Set<String> effectiveHiddenLabels = hiddenLabels ?? config.hiddenLabels;
   final bool effectiveShowAllLabels = showAllLabels ?? config.showAllLabels;
   final String effectiveWorkflowRepo = workflowRepo ?? config.workflowRepo;
+  final String? rawRefreshEndpoint = (refreshEndpoint ?? config.refreshEndpoint)?.trim();
+  final String? effectiveRefreshEndpoint =
+      rawRefreshEndpoint != null && rawRefreshEndpoint.isNotEmpty ? rawRefreshEndpoint : null;
   final String? effectiveTeamLabel = identical(teamLabel, _unsetReportLabel)
       ? config.issueTeamLabel
       : teamLabel;
@@ -98,6 +102,7 @@ void writeHtmlReport({
       showHiddenByDefault: showHiddenByDefault,
       showAllLabels: effectiveShowAllLabels,
       workflowRepo: effectiveWorkflowRepo,
+      refreshEndpoint: effectiveRefreshEndpoint,
       config: config,
       activeConfigName: activeConfigName,
       configLinks: configLinks,
@@ -119,6 +124,7 @@ void writeHtmlReport({
     suggestedReviewers: suggestedReviewers,
     showAllLabels: effectiveShowAllLabels,
     workflowRepo: effectiveWorkflowRepo,
+    refreshEndpoint: effectiveRefreshEndpoint,
     teamLabel: effectiveTeamLabel,
     fyiLabel: effectiveFyiLabel,
     config: config,
@@ -175,6 +181,18 @@ String _renderConfigSwitcher({
   return buffer.toString();
 }
 
+String _refreshControlsHtml(String? refreshEndpoint, DateTime generatedAt) {
+  if (refreshEndpoint == null || refreshEndpoint.isEmpty) {
+    return '';
+  }
+  final String iso = _escape(generatedAt.toUtc().toIso8601String());
+  final String formatted = _escape(formatAsMinute(generatedAt));
+  return '<button id="refresh-report" type="button">↻ Refresh report</button>\n'
+      '<span id="refreshed-at" class="refresh-status">Refreshed at '
+      '<time datetime="$iso">$formatted</time></span>\n'
+      '<span id="refresh-status" class="refresh-status" aria-live="polite"></span>\n';
+}
+
 class _PageRenderer {
   _PageRenderer({
     required this.page,
@@ -190,6 +208,7 @@ class _PageRenderer {
     required this.showHiddenByDefault,
     required this.showAllLabels,
     required this.workflowRepo,
+    this.refreshEndpoint,
     required this.config,
     required this.activeConfigName,
     required this.configLinks,
@@ -212,6 +231,7 @@ class _PageRenderer {
   final bool showHiddenByDefault;
   final bool showAllLabels;
   final String workflowRepo;
+  final String? refreshEndpoint;
   final TriageConfig config;
   final String? activeConfigName;
   final List<({String name, String dirPrefix})> configLinks;
@@ -279,7 +299,7 @@ class _PageRenderer {
 <style>
 $_css</style>
 </head>
-<body data-hidden-labels="${_escape(hiddenLabels.join('|'))}" data-show-hidden-default="$showHiddenByDefault" data-generated-at="${_escape(generatedAt.toUtc().toIso8601String())}" data-workflow-repo="${_escape(workflowRepo)}" data-config-name="${_escape(activeConfigName ?? '')}">
+<body data-hidden-labels="${_escape(hiddenLabels.join('|'))}" data-show-hidden-default="$showHiddenByDefault" data-generated-at="${_escape(generatedAt.toUtc().toIso8601String())}" data-workflow-repo="${_escape(workflowRepo)}" data-config-name="${_escape(activeConfigName ?? '')}" data-refresh-endpoint="${_escape(refreshEndpoint ?? '')}">
 ''');
   }
 
@@ -346,6 +366,7 @@ $_css</style>
       ..writeln(
         '<button id="open-companion" type="button" title="Open an always-on-top floating window with the active row&#39;s triage details">🪟 Triage companion</button>',
       )
+      ..write(_refreshControlsHtml(refreshEndpoint, generatedAt))
       ..writeln('</div>')
       ..writeln(
         '<input id="filter" type="search" placeholder="Filter by number, title, author, label, reviewer, or next step" autocomplete="off">',
@@ -551,6 +572,7 @@ class _IssuesPageRenderer {
     required this.suggestedReviewers,
     required this.showAllLabels,
     required this.workflowRepo,
+    this.refreshEndpoint,
     required this.teamLabel,
     required this.fyiLabel,
     required this.config,
@@ -570,6 +592,7 @@ class _IssuesPageRenderer {
   final Map<String, String> suggestedReviewers;
   final bool showAllLabels;
   final String workflowRepo;
+  final String? refreshEndpoint;
   final String? teamLabel;
   final String? fyiLabel;
   final TriageConfig config;
@@ -615,7 +638,7 @@ class _IssuesPageRenderer {
 <style>
 $_css</style>
 </head>
-<body data-hidden-labels="" data-show-hidden-default="true" data-generated-at="${_escape(generatedAt.toUtc().toIso8601String())}" data-workflow-repo="${_escape(workflowRepo)}" data-config-name="${_escape(activeConfigName ?? '')}">
+<body data-hidden-labels="" data-show-hidden-default="true" data-generated-at="${_escape(generatedAt.toUtc().toIso8601String())}" data-workflow-repo="${_escape(workflowRepo)}" data-config-name="${_escape(activeConfigName ?? '')}" data-refresh-endpoint="${_escape(refreshEndpoint ?? '')}">
 ''');
     _writeHeader(sections);
     sections.forEach(_writeSection);
@@ -658,7 +681,7 @@ $_css</style>
 <button id="toggle-followup" type="button" aria-pressed="false"${followUpCount == 0 ? ' disabled' : ''}>Follow-up issues ($followUpCount)</button>
 <label class="filter-chip"><input id="hide-waiting-response" type="checkbox" checked><span>Hide waiting-for-response ($waitingResponseCount)</span></label>
 <button id="open-companion" type="button" title="Open an always-on-top floating window with the active row&#39;s triage details">🪟 Triage companion</button>
-</div>
+${_refreshControlsHtml(refreshEndpoint, generatedAt)}</div>
 <input id="filter" type="search" placeholder="Filter by number, title, author, label, assignee, or next step" autocomplete="off">
 ''');
     if (failed > 0) {
@@ -1426,6 +1449,10 @@ const String _css = r'''
   }
   .legend ul { margin: 0; padding-left: 18px; }
   .legend li { margin: 4px 0; }
+  .refresh-status {
+    font-size: 0.82rem;
+    color: var(--muted);
+  }
   .filter-group {
     display: inline-flex;
     align-items: center;
@@ -1701,6 +1728,8 @@ const String _script = r'''
   const designStorageKey = 'prTriage.showDesign';
   const waitingResponseStorageKey = 'prTriage.hideWaitingForResponse';
   const companionAutoOpenStorageKey = 'prTriage.companionAutoOpen';
+  const lastRunStorageKey = 'prTriage.lastWorkflowRunAt';
+  const cooldownMs = 5 * 60 * 1000;
   const filter = document.getElementById('filter');
   const showCommunityCheckbox = document.getElementById('show-community');
   const showTeamCheckbox = document.getElementById('show-team');
@@ -1710,6 +1739,10 @@ const String _script = r'''
   const hideWaitingCheckbox = document.getElementById('hide-waiting-response');
   const openCompanionButton = document.getElementById('open-companion');
   const companionDock = document.getElementById('triage-companion-dock');
+  const refreshButton = document.getElementById('refresh-report');
+  const refreshedAtEl = document.getElementById('refreshed-at');
+  const refreshStatus = document.getElementById('refresh-status');
+  const refreshEndpoint = (body.dataset.refreshEndpoint || '').trim();
   const rows = Array.from(document.querySelectorAll('tbody tr[data-number]'));
   const sections = Array.from(document.querySelectorAll('details[data-section]'));
   const showHiddenDefault = body.dataset.showHiddenDefault === 'true';
@@ -2427,6 +2460,239 @@ const String _script = r'''
       }
       update();
     });
+  }
+
+  if (refreshButton && refreshEndpoint) {
+    const hostMatch = window.location.hostname.match(/^([^.]+)\.github\.io$/);
+    const pathSeg = window.location.pathname.split('/').filter(Boolean)[0];
+    const workflowRepo = (hostMatch && pathSeg)
+        ? `${hostMatch[1]}/${pathSeg}`
+        : (body.dataset.workflowRepo || 'tarrinneal/packages-triage');
+    const runsApiUrl = `https://api.github.com/repos/${workflowRepo}/actions/workflows/deploy_pages.yml/runs?per_page=10`;
+    const actionsHtmlUrl = `https://github.com/${workflowRepo}/actions/workflows/deploy_pages.yml`;
+
+    const generatedMs = Date.parse(body.dataset.generatedAt || '') || 0;
+    let lastRunTimeMs = generatedMs;
+    try {
+      const savedLastRun = Number(localStorage.getItem(lastRunStorageKey));
+      if (savedLastRun > lastRunTimeMs) {
+        lastRunTimeMs = savedLastRun;
+      }
+    } catch (e) {
+      // Ignore storage errors.
+    }
+    let runInProgress = false;
+    let pollTimer = null;
+
+    function formatRemaining(ms) {
+      const totalSec = Math.max(1, Math.ceil(ms / 1000));
+      const min = Math.floor(totalSec / 60);
+      const sec = totalSec % 60;
+      return min > 0 ? `${min}m ${String(sec).padStart(2, '0')}s` : `${sec}s`;
+    }
+
+    function showStatusLink(prefix, url, label) {
+      if (!refreshStatus) {
+        return;
+      }
+      refreshStatus.textContent = '';
+      refreshStatus.appendChild(document.createTextNode(prefix));
+      const link = document.createElement('a');
+      link.href = /^https?:\/\//.test(url) ? url : actionsHtmlUrl;
+      link.target = '_blank';
+      link.rel = 'noopener';
+      link.textContent = label;
+      refreshStatus.appendChild(link);
+    }
+
+    function startPollingRuns() {
+      if (pollTimer) {
+        return;
+      }
+      pollTimer = setInterval(async () => {
+        await checkWorkflowRuns();
+        if (!runInProgress) {
+          clearInterval(pollTimer);
+          pollTimer = null;
+          window.location.reload();
+        }
+      }, 10000);
+    }
+
+    function formatRelativeAge(ms) {
+      const minutes = Math.max(0, Math.floor(ms / 60000));
+      if (minutes < 1) {
+        return 'just now';
+      }
+      if (minutes < 60) {
+        return `${minutes}m ago`;
+      }
+      const hours = Math.floor(minutes / 60);
+      if (hours < 24) {
+        return `${hours}h ago`;
+      }
+      return `${Math.floor(hours / 24)}d ago`;
+    }
+
+    function syncRefreshedAt() {
+      if (!refreshedAtEl || generatedMs <= 0) {
+        return;
+      }
+      const d = new Date(generatedMs);
+      const now = new Date();
+      const sameDay = d.getFullYear() === now.getFullYear() &&
+          d.getMonth() === now.getMonth() &&
+          d.getDate() === now.getDate();
+      const timeText = sameDay
+          ? d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+          : d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+      const text = `Refreshed at ${timeText} (${formatRelativeAge(Date.now() - generatedMs)})`;
+      if (refreshedAtEl.textContent !== text) {
+        refreshedAtEl.textContent = text;
+        refreshedAtEl.title = d.toLocaleString();
+      }
+    }
+
+    function syncRefreshButton() {
+      syncRefreshedAt();
+      if (runInProgress) {
+        refreshButton.disabled = true;
+        refreshButton.textContent = '↻ Running action…';
+        refreshButton.title = 'GitHub Action is currently running.';
+        return;
+      }
+      const elapsed = Date.now() - lastRunTimeMs;
+      if (lastRunTimeMs > 0 && elapsed < cooldownMs) {
+        refreshButton.disabled = true;
+        refreshButton.textContent = `↻ Refresh in ${formatRemaining(cooldownMs - elapsed)}`;
+        refreshButton.title = 'Report can only be refreshed at least 5 minutes after the last run.';
+      } else {
+        refreshButton.disabled = false;
+        refreshButton.textContent = '↻ Refresh report';
+        refreshButton.title = 'Trigger a GitHub Actions rebuild of this report.';
+      }
+    }
+
+    async function checkWorkflowRuns() {
+      try {
+        const res = await fetch(runsApiUrl, {
+          headers: { 'Accept': 'application/vnd.github+json' },
+          cache: 'no-store',
+        });
+        if (!res.ok) {
+          return;
+        }
+        const data = await res.json();
+        const runs = Array.isArray(data.workflow_runs) ? data.workflow_runs : [];
+        const activeRun = runs.find((r) => r.status !== 'completed');
+        if (activeRun) {
+          runInProgress = true;
+          const startedMs = Date.parse(activeRun.run_started_at || activeRun.created_at || '') || Date.now();
+          if (startedMs > lastRunTimeMs) {
+            lastRunTimeMs = startedMs;
+          }
+          startPollingRuns();
+        } else {
+          runInProgress = false;
+        }
+        for (const run of runs) {
+          if (run.conclusion !== 'success') {
+            continue;
+          }
+          const started = Date.parse(run.run_started_at || run.created_at || '') || 0;
+          const updated = Date.parse(run.updated_at || '') || 0;
+          if (updated - started < 20000) {
+            continue;
+          }
+          if (updated > lastRunTimeMs) {
+            lastRunTimeMs = updated;
+            try {
+              localStorage.setItem(lastRunStorageKey, String(lastRunTimeMs));
+            } catch (e) {
+              // Ignore storage errors.
+            }
+          }
+          break;
+        }
+      } catch (e) {
+        // Ignore network errors during background status check.
+      }
+      syncRefreshButton();
+    }
+
+    refreshButton.addEventListener('click', async () => {
+      await checkWorkflowRuns();
+      if (runInProgress || (lastRunTimeMs > 0 && Date.now() - lastRunTimeMs < cooldownMs)) {
+        syncRefreshButton();
+        return;
+      }
+      refreshButton.disabled = true;
+      refreshButton.textContent = '↻ Starting…';
+      if (refreshStatus) {
+        refreshStatus.textContent = '';
+      }
+      try {
+        const configName = body.dataset.configName || '';
+        const payload = configName ? { config: configName } : {};
+        const res = await fetch(refreshEndpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.status === 429) {
+          const remainingSec = Number(data.cooldownRemainingSeconds) || 0;
+          if (remainingSec > 0) {
+            lastRunTimeMs = Date.now() - Math.max(0, cooldownMs - remainingSec * 1000);
+          }
+          if (refreshStatus) {
+            refreshStatus.textContent = remainingSec > 0
+                ? `Recently refreshed — try again in ${formatRemaining(remainingSec * 1000)}.`
+                : 'Recently refreshed — please wait a few minutes.';
+          }
+          syncRefreshButton();
+          return;
+        }
+        if (!res.ok) {
+          if (refreshStatus) {
+            refreshStatus.textContent = data.error || `Failed to start refresh (HTTP ${res.status}).`;
+          }
+          syncRefreshButton();
+          return;
+        }
+        if (data.alreadyRunning || data.status === 'running') {
+          runInProgress = true;
+          showStatusLink(
+            'Refresh already running — ',
+            data.runUrl || actionsHtmlUrl,
+            'view on GitHub Actions',
+          );
+          syncRefreshButton();
+          startPollingRuns();
+          return;
+        }
+        lastRunTimeMs = Date.now();
+        try {
+          localStorage.setItem(lastRunStorageKey, String(lastRunTimeMs));
+        } catch (e) {
+          // Ignore storage errors.
+        }
+        runInProgress = true;
+        showStatusLink('Workflow triggered — ', actionsHtmlUrl, 'view on GitHub Actions');
+        syncRefreshButton();
+        startPollingRuns();
+        setTimeout(checkWorkflowRuns, 4000);
+      } catch (e) {
+        if (refreshStatus) {
+          refreshStatus.textContent = 'Network error triggering refresh.';
+        }
+        syncRefreshButton();
+      }
+    });
+
+    syncRefreshButton();
+    setInterval(syncRefreshButton, 1000);
+    checkWorkflowRuns();
   }
 
   for (const header of document.querySelectorAll('th[data-sort]')) {

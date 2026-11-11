@@ -21,18 +21,16 @@ const TriageConfig defaultConfig = TriageConfig(
     'bkonyi',
     'bparrishMines',
     'camsim99',
-    'cbracken',
+    'chunhtai',
     'ditman',
     'dkwingsmt',
     'domesticmouse',
-    'elliette',
-    'flutter',
     'gmackall',
+    'hannah-hyj',
     'hellohuanlin',
     'Hixie',
     'jesswrd',
     'jtmcdole',
-    'loic-sharma',
     'LongCatIsLooong',
     'louisehsu',
     'mboetger',
@@ -40,12 +38,14 @@ const TriageConfig defaultConfig = TriageConfig(
     'okorohelijah',
     'parlough',
     'Piinks',
-    'pjkammer',
     'qunccccccc',
+    'reidbaker',
     'robert-ancell',
     'sokoloff06',
+    'stuartmorgan-g',
     'tarrinneal',
     'vashworth',
+    'victorsanni',
     'yjbanov',
   ],
   rosterFile: 'flutter/packages:SUGGESTED_REVIEWERS.md',
@@ -227,6 +227,7 @@ class _DartConfigParser {
     'prLabels',
     'issuesRepo',
     'workflowRepo',
+    'refreshEndpoint',
     'rosterFile',
     'botAccounts',
     'requiredApprovals',
@@ -384,6 +385,19 @@ class _DartConfigParser {
     if (issuesRepo != null && !RegExp(r'^[\w.-]+/[\w.-]+$').hasMatch(issuesRepo)) {
       _error('"$issuesRepo" in "issuesRepo" is not in owner/repo form');
     }
+    final String? rawRefreshEndpoint = nullableString(
+      'refreshEndpoint',
+      defaultIfOmitted: defaultRefreshEndpoint,
+    );
+    final String? refreshEndpoint = rawRefreshEndpoint != null && rawRefreshEndpoint.trim().isEmpty
+        ? null
+        : rawRefreshEndpoint?.trim();
+    if (refreshEndpoint != null) {
+      final Uri? uri = Uri.tryParse(refreshEndpoint);
+      if (uri == null || (uri.scheme != 'https' && uri.scheme != 'http') || uri.host.isEmpty) {
+        _error('"$refreshEndpoint" in "refreshEndpoint" must be an http(s) URL');
+      }
+    }
 
     const unset = '\x00unset';
     final String? rosterFileArg = nullableString('rosterFile', defaultIfOmitted: unset);
@@ -399,6 +413,7 @@ class _DartConfigParser {
       prLabels: stringSet('prLabels') ?? const <String>{},
       issuesRepo: issuesRepo,
       workflowRepo: nonNullString('workflowRepo') ?? defaultWorkflowRepo,
+      refreshEndpoint: refreshEndpoint,
       rosterFile: identical(rosterFileArg, unset)
           ? (flutterTeam == 'ecosystem' ? defaultRosterFile : null)
           : rosterFileArg,
@@ -535,6 +550,8 @@ class _DartConfigParser {
         return defaultIssuesRepo;
       case 'defaultWorkflowRepo':
         return defaultWorkflowRepo;
+      case 'defaultRefreshEndpoint':
+        return defaultRefreshEndpoint;
       case 'defaultRosterFile':
         return defaultRosterFile;
       case 'defaultBotAccounts':

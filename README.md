@@ -17,6 +17,31 @@ Once enabled, the report will be published at:
 - `https://<owner>.github.io/<repo>/` (Primary config's Community PRs, Team PRs, and Issues)
 - `https://<owner>.github.io/<repo>/<config_name>/` (Each `configs/<config_name>.dart`'s Community PRs, `index_team.html`, and `index_issues.html`, with a **Config** dropdown in the header to switch between them)
 
+### Reliable hourly refreshes & public Refresh button (Firebase)
+
+GitHub Actions `on: schedule` runs are best-effort and are frequently delayed or skipped during high load. The [`firebase/`](firebase/) directory contains two Firebase Cloud Functions v2:
+- `scheduledTriageRefresh`: Runs every hour (`0 * * * *` UTC) via Google Cloud Scheduler and triggers `workflow_dispatch` reliably.
+- `refreshTriage`: A public HTTP endpoint (`onRequest`) that powers an in-page **↻ Refresh report** button so any visitor can trigger a rebuild (subject to a 5-minute cooldown) without needing a GitHub token or collaborator access.
+
+To deploy it (requires a Firebase project on the Blaze plan; usage fits in the free tier):
+1. Install dependencies and link your Firebase project:
+   ```sh
+   cd firebase/functions && npm install && cd ..
+   npx firebase-tools login
+   npx firebase-tools use --add
+   ```
+2. Store a fine-grained GitHub PAT with **Actions: Read and write** on your Pages repository (`tarrinneal/packages-triage`):
+   ```sh
+   npx firebase-tools functions:secrets:set GITHUB_ACTIONS_TOKEN
+   ```
+3. Deploy the functions:
+   ```sh
+   npx firebase-tools deploy --only functions
+   ```
+4. Copy the deployed `refreshTriage` URL (e.g. `https://refreshtriage-...a.run.app`) into GitHub **Settings → Secrets and variables → Actions → Variables** as `REFRESH_ENDPOINT` (or set `defaultRefreshEndpoint` in `lib/types.dart`).
+
+Once `REFRESH_ENDPOINT` is set, generated HTML pages automatically include the **↻ Refresh report** button.
+
 ## Configuration (`configs/*.dart`)
 
 Each `.dart` file in [`configs/`](configs/) defines a `const TriageConfig` for one hosted team dashboard (for example, [`configs/ecosystem.dart`](configs/ecosystem.dart)):

@@ -404,9 +404,14 @@ const String defaultRefreshSchedule = '57 * * * *';
 /// Default repository where issues are tracked for [defaultRepos].
 const String defaultIssuesRepo = 'flutter/flutter';
 
-/// Default repository used by the in-page "Refresh report" button to trigger
-/// the GitHub Actions workflow when not hosted on `*.github.io`.
+/// Default repository used by the in-page "Refresh report" button to inspect
+/// workflow runs and trigger refreshes.
 const String defaultWorkflowRepo = 'tarrinneal/packages-triage';
+
+/// Default HTTP endpoint (for example a deployed Firebase `refreshTriage`
+/// function URL) used by the in-page "Refresh report" button, or `null` to
+/// omit the button unless `REFRESH_ENDPOINT` is set in the environment.
+const String? defaultRefreshEndpoint = null;
 
 /// Default file in each repository used to discover team members and suggested
 /// package reviewers.
@@ -479,6 +484,7 @@ class TriageConfig {
     this.prLabels = const <String>{},
     this.issuesRepo = defaultIssuesRepo,
     this.workflowRepo = defaultWorkflowRepo,
+    this.refreshEndpoint = defaultRefreshEndpoint,
     String? rosterFile = _deriveFromTeam,
     this.botAccounts = defaultBotAccounts,
     this.requiredApprovals = defaultRequiredApprovals,
@@ -528,6 +534,11 @@ class TriageConfig {
   /// Repository (`owner/repo`) that hosts the `deploy_pages.yml` GitHub
   /// Actions workflow for the in-page "Refresh report" button.
   final String workflowRepo;
+
+  /// Optional HTTP endpoint (such as a Firebase Cloud Function URL) called by
+  /// the in-page "Refresh report" button to trigger `workflow_dispatch`, or
+  /// `null` to omit the button unless `REFRESH_ENDPOINT` is provided.
+  final String? refreshEndpoint;
 
   final String? _rosterFile;
 

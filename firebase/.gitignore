@@ -1,0 +1,9 @@
+node_modules/
+package-lock.json
+.firebase/
+.firebaserc
+firebase-debug.log*
+pglite-debug.log*
+.env
+.env.*
+!.env.example
