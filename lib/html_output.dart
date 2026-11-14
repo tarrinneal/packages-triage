@@ -1547,10 +1547,11 @@ const String _css = r'''
   }
   .companion-dock {
     position: fixed;
-    right: 20px;
-    bottom: 20px;
-    width: min(560px, calc(100vw - 40px));
-    max-height: calc(100vh - 40px);
+    top: 14px;
+    right: 14px;
+    bottom: 14px;
+    width: min(360px, calc(100vw - 28px));
+    max-height: calc(100vh - 28px);
     overflow-y: auto;
     background: var(--card-bg);
     border: 1px solid var(--link);
@@ -1565,11 +1566,11 @@ const String _css = r'''
     background: var(--card-bg);
   }
   .companion-card {
-    padding: 12px 14px;
-    font-size: 0.84rem;
+    padding: 10px 12px;
+    font-size: 0.82rem;
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 8px;
   }
   .companion-topbar {
     display: flex;
@@ -1635,12 +1636,15 @@ const String _css = r'''
   }
   .companion-title-row {
     display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 10px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+  }
+  .companion-title-row [data-action="open-github"] {
+    align-self: flex-start;
   }
   .companion-heading {
-    font-size: 0.96rem;
+    font-size: 0.9rem;
     font-weight: 600;
     line-height: 1.35;
     margin: 0;
@@ -1652,14 +1656,14 @@ const String _css = r'''
   }
   .companion-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-    gap: 8px;
+    grid-template-columns: 1fr;
+    gap: 7px;
   }
   .companion-box {
     background: var(--bg);
     border: 1px solid var(--border);
     border-radius: 8px;
-    padding: 8px 10px;
+    padding: 7px 9px;
   }
   .companion-box.full {
     grid-column: 1 / -1;
@@ -2124,9 +2128,13 @@ const String _script = r'''
     }
     if ('documentPictureInPicture' in window) {
       try {
+        const sidebarHeight = Math.min(
+          760,
+          Math.max(480, Math.round(((window.screen && window.screen.availHeight) || 860) * 0.82)),
+        );
         pipWindow = await window.documentPictureInPicture.requestWindow({
-          width: 560,
-          height: 410,
+          width: 350,
+          height: sidebarHeight,
         });
         pipWindow.document.title = 'Triage Companion';
         const styleEl = pipWindow.document.createElement('style');

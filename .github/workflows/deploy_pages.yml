@@ -3,9 +3,6 @@ name: Deploy PR Triage Report to GitHub Pages
 on:
   push:
     branches: [main]
-  schedule:
-    # Synced from configs/*.dart (edit refreshSchedule in configs/<name>.dart):
-    - cron: '57 * * * *' # ecosystem, accessibility, android, design, devexp, engine, fluttergpu, framework, infra, ios, linux, macos, text_input, tool, web, windows
   workflow_dispatch:
     inputs:
       config:
