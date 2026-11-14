@@ -1798,6 +1798,8 @@ const String _script = r'''
   let companionQueueLabel = '';
   let pipWindow = null;
   const openedTabsByUrl = new Map();
+  let sharedGitHubTab = null;
+  let sharedGitHubUrl = '';
 
   function escapeHtml(str) {
     return String(str || '')
@@ -1910,8 +1912,12 @@ const String _script = r'''
     }
   }
 
-  function openOrFocusGitHub(url) {
+  function openOrFocusGitHub(url, forceNavigate = false) {
     if (!url) {
+      return;
+    }
+    if (!forceNavigate && sharedGitHubTab && !sharedGitHubTab.closed && sharedGitHubUrl === url) {
+      sharedGitHubTab.focus();
       return;
     }
     const existing = openedTabsByUrl.get(url);
@@ -1921,7 +1927,8 @@ const String _script = r'''
     }
     const win = window.open(url, 'prTriageGitHub');
     if (win) {
-      openedTabsByUrl.set(url, win);
+      sharedGitHubTab = win;
+      sharedGitHubUrl = url;
       win.focus();
     }
   }
@@ -2071,7 +2078,7 @@ const String _script = r'''
         }
       } else if (action === 'open-github' && companionQueue.length > 0) {
         const item = extractRowData(companionQueue[companionIndex]);
-        openOrFocusGitHub(item.url);
+        openOrFocusGitHub(item.url, true);
       } else if (action === 'popout') {
         await openPipCompanion();
       } else if (action === 'close-dock') {

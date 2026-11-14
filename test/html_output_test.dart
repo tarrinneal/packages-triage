@@ -724,6 +724,7 @@ void main() {
       );
       expect(pageHtml, contains('window.documentPictureInPicture.requestWindow'));
       expect(pageHtml, contains('width: 350,'));
+      expect(pageHtml, contains('sharedGitHubUrl === url'));
       expect(pageHtml, contains('Suggested Reviewers (from SUGGESTED_REVIEWERS.md)'));
       expect(pageHtml, contains('Auto-open GitHub'));
     }
