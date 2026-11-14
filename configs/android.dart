@@ -12,7 +12,7 @@ import 'package:pr_inspector/types.dart';
 /// Edit this file to adjust the repositories, PR filter labels, schedule, or
 /// team members.
 const TriageConfig config = TriageConfig(
-  repos: <String>['flutter/flutter', 'flutter/packages'],
+  repos: <String>['flutter/flutter', 'flutter/packages', 'flutter/core-packages'],
   flutterTeam: 'android',
   refreshSchedule: '57 * * * *',
   prLabels: <String>{'platform-android', 'team-android', 'fyi-android', 'triage-android'},
